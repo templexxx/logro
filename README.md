@@ -3,7 +3,7 @@ Logro
 
 ## Introduction
 
-Logro is a Go package for writing logs to rolling files. Inspired by [lumberjack](https://github.com/natefinch/lumberjack)
+Logro is a log rolling package with page cache control in Go. Inspired by [lumberjack](https://github.com/natefinch/lumberjack)
 
 Logro is built for high performance:
 
