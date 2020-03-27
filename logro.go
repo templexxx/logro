@@ -9,188 +9,95 @@
 package logro
 
 import (
-	"bufio"
 	"container/heap"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/templexxx/fnc"
 )
 
-// Config of Logro.
-type Config struct {
-	// Configs of Log Rotation.
-	OutputPath string `json:"output_path" toml:"output_path"` // Log file path.
-	// Maximum size of a log file before it gets rotated.
-	// Unit is MB.
-	MaxSize int64 `json:"max_size" toml:"max_size"`
-	// Maximum number of backup log files to retain.
-	MaxBackups int `json:"max_backups" toml:"max_backups"`
-	// Timestamp in backup log file. Default is to use UTC time.
-	LocalTime bool `json:"local_time" toml:"local_time"`
-
-	// After write BytesPerSync bytes flush data to storage media(hint).
-	BytesPerSync int64 `json:"bytes_per_sync" toml:"bytes_per_sync"`
-
-	// Develop mode. Default is false.
-	// It' used for testing, if it's true, the page cache control unit could not be aligned to page cache size.
-	Developed bool `json:"developed" toml:"developed"`
-}
-
 // Rotation is implement io.WriteCloser interface with func Sync() (err error).
 type Rotation struct {
-	sync.Mutex
+	mu sync.Mutex
 
-	conf *Config
+	cfg *Config
 
-	file  *os.File // output *os.File.
-	fsize int64    // output file size.
-	// dirty page cache info.
-	// ps: may already been flushed by kernel.
-	dirtyOffset int64
-	dirtySize   int64
-	// user-space buffer for log writing.
-	buf *bufio.Writer
-	// jobs of sync page cache, use chan for avoiding stall.
-	syncJobs chan syncJob
-	Backups  *Backups // all backups information.
+	isRunning int64
+
+	backups *Backups
+
+	f           *os.File
+	fileWritten int64
+	dirty       int64
+	buf         *bufIO
+
+	syncJobs   chan syncJob
+	ctx        context.Context
+	loopCtx    context.Context
+	loopCancel func()
+	loopWg     sync.WaitGroup
 }
 
-var (
-	// Use variables for tests easier.
-	kb int64 = 1024
-	mb       = 1024 * kb
+// New creates a Rotation.
+func New(cfg *Config) (r *Rotation, err error) {
 
-	// >32KB couldn't improve performance significantly.
-	defaultBufSize = 32 * kb // 32KB
-
-	defaultBytesPerSync = mb // 1MB
-
-	// We don't need to keep too many backups,
-	// in practice, log shipper will collect the logs already.
-	defaultMaxSize    = 128 * mb
-	defaultMaxBackups = 8
-)
-
-// New create a Rotation.
-func New(conf *Config) (r *Rotation, err error) {
-
-	r = &Rotation{conf: conf}
-	err = r.init()
+	r, err = prepare(cfg)
 	if err != nil {
 		return
 	}
 
-	go r.doSyncJob() // sync log content async.
+	r.run()
 
 	return
 }
 
-func (r *Rotation) init() (err error) {
+func prepare(cfg *Config) (r *Rotation, err error) {
 
-	err = r.parseConf()
+	if cfg.OutputPath == "" {
+		return nil, errors.New("empty log file path")
+	}
+
+	cfg.adjust()
+
+	r = &Rotation{cfg: cfg}
+	bs, err := listBackups(cfg.OutputPath, cfg.MaxBackups)
+	if err != nil {
+		return
+	}
+	r.backups = bs
+
+	err = r.open()
 	if err != nil {
 		return
 	}
 
-	backups := make(Backups, 0, r.conf.MaxBackups*2)
-	r.Backups = &backups
-	r.Backups.list(r.conf.OutputPath, r.conf.MaxBackups)
-
-	err = r.openExistOrNew()
-	if err != nil {
-		return
-	}
-
-	r.buf = bufio.NewWriterSize(r.file, int(defaultBufSize))
-
-	r.syncJobs = make(chan syncJob, 8) // 8 is enough in most cases.
-	return
-}
-
-func (r *Rotation) parseConf() (err error) {
-
-	conf := r.conf
-	if conf.OutputPath == "" {
-		return errors.New("empty log file path")
-	}
-
-	if conf.MaxBackups <= 0 {
-		conf.MaxBackups = defaultMaxBackups
-	}
-
-	if conf.MaxSize <= 0 {
-		conf.MaxSize = defaultMaxSize
-	} else {
-		conf.MaxSize = conf.MaxSize * mb
-	}
-	if conf.BytesPerSync <= 0 {
-		conf.BytesPerSync = defaultBytesPerSync
-	}
-	if !conf.Developed {
-		conf.MaxSize = alignToPage(conf.MaxSize)
-		conf.BytesPerSync = alignToPage(conf.BytesPerSync)
-	}
+	r.buf = newBufIO(r.f, int(r.cfg.BufSize))
+	r.syncJobs = make(chan syncJob, 16)
 
 	return
 }
 
-const pageSize = 1 << 12 // 4KB.
+// open opens a new log file.
+// If log file existed, move it to backups.
+func (r *Rotation) open() (err error) {
 
-func alignToPage(n int64) int64 {
-	return (n + pageSize - 1) &^ (pageSize - 1)
-}
-
-// Open log file when start up.
-func (r *Rotation) openExistOrNew() (err error) {
-
-	fp := r.conf.OutputPath
-	if !fnc.Exist(fp) {
-		return r.openNew()
-	}
-
-	f, err := r.openFile(fp, os.O_WRONLY)
-	if err != nil {
-		return
-	}
-	stat, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return
-	}
-
-	r.file = f
-	r.fsize = stat.Size()
-
-	// maybe not correct, but it's ok.
-	r.dirtyOffset = stat.Size()
-	r.dirtySize = 0
-
-	return
-}
-
-// Open a new log file in two conditions:
-// 1. Start up with no existed log file.
-// 2. Need rename in rotation process.
-func (r *Rotation) openNew() (err error) {
-	fp := r.conf.OutputPath
-	if fnc.Exist(fp) { // file exist may happen in rotation process.
-		backupFP, t := makeBackupFP(fp, r.conf.LocalTime, time.Now())
-
+	fp := r.cfg.OutputPath
+	if fnc.Exist(fp) { // File exist may happen in rotation process.
+		backupFP, t := makeBackupFP(fp, r.cfg.LocalTime, time.Now())
 		err = os.Rename(fp, backupFP)
 		if err != nil {
 			return fmt.Errorf("failed to rename log file, output: %s backup: %s", fp, backupFP)
 		}
 
-		r.sync(true)
-
-		heap.Push(r.Backups, Backup{t, backupFP})
-		if r.Backups.Len() > r.conf.MaxBackups {
-			v := heap.Pop(r.Backups)
+		heap.Push(r.backups, Backup{t, backupFP})
+		if r.backups.Len() > r.cfg.MaxBackups {
+			v := heap.Pop(r.backups)
 			os.Remove(v.(Backup).fp)
 		}
 	}
@@ -204,120 +111,167 @@ func (r *Rotation) openNew() (err error) {
 	// Truncate here to clean up file content if someone else creates
 	// the file between exist checking and create file.
 	// Can't use os.O_EXCL here, because it may break rotation process.
-	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	f, err := r.openFile(fp, flag)
+	//
+	// Most of log shippers monitor file size, and APPEND only can avoid Read-Modify-Write.
+	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC | os.O_APPEND
+	f, err := fnc.OpenFile(fp, flag, 0644)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to create log file: %s", err.Error())
 	}
 
-	r.file = f
-	r.buf = bufio.NewWriterSize(f, int(defaultBufSize))
-	r.fsize = 0
-	r.dirtyOffset = 0
-	r.dirtySize = 0
-
+	r.f = f
 	return
 }
 
-func (r *Rotation) openFile(fp string, flag int) (f *os.File, err error) {
-
-	// Logro use append-only mode to write data,
-	// although it will change file size in every write
-	// (in Logro cases, we don't sync frequently,so it's okay),
-	// but it avoid Read-Modify-Write because append means newly allocated pages are always cached.
-	flag |= os.O_APPEND
-
-	f, err = fnc.OpenFile(fp, flag, 0644)
-	if err != nil {
-		return f, fmt.Errorf("failed to open log file:%s", err.Error())
-	}
-
-	return
+func (r *Rotation) run() {
+	r.startLoop()
+	atomic.StoreInt64(&r.isRunning, 1)
 }
 
-// Write data to log file.
+func (r *Rotation) startLoop() {
+	r.loopCtx, r.loopCancel = context.WithCancel(context.Background())
+	r.loopWg.Add(1)
+	go r.syncLoop()
+}
+
+// Write writes data to buffer then notify file write.
 func (r *Rotation) Write(p []byte) (written int, err error) {
-	r.Lock()
-	defer r.Unlock()
 
-	if r.file == nil {
-		err = errors.New("failed to open log file")
+	if r.isClosed() {
 		return
 	}
 
-	written, err = r.buf.Write(p)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	written, fw, err := r.buf.write(p)
 	if err != nil {
 		return
 	}
+	r.fileWritten += int64(fw)
+	r.dirty += int64(fw)
 
-	r.fsize += int64(written)
-	r.dirtySize += int64(written)
-
-	if r.dirtySize >= r.conf.BytesPerSync {
-		r.sync(false)
+	if r.dirty >= r.cfg.PerSyncSize {
+		r.syncJobs <- syncJob{
+			f:     r.f,
+			size:  r.dirty,
+			isOld: false,
+		}
+		r.dirty = 0
 	}
 
-	if r.fsize >= r.conf.MaxSize {
-		if err = r.openNew(); err != nil {
+	if r.fileWritten >= r.cfg.MaxSize {
+		r.fileWritten = 0 // Even open failed, could avoid keeping recreating.
+		r.syncJobs <- syncJob{
+			f:     r.f,
+			size:  0,
+			isOld: true,
+		}
+		err = r.open()
+		if err != nil {
 			return
 		}
+		r.buf.reset(r.f)
 	}
+
 	return
 }
 
-// Sync buf & dirty_page_cache to the storage media.
+// Sync syncs all dirty data.
 func (r *Rotation) Sync() (err error) {
-	r.Lock()
-	defer r.Unlock()
 
-	r.sync(false)
+	if r.isClosed() {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	fw, err := r.buf.flush()
+	if err != nil {
+		return
+	}
+
+	r.syncJobs <- syncJob{
+		f:     r.f,
+		size:  int64(fw),
+		isOld: false,
+	}
 	return
 }
 
-// sync creates sync job.
-// isBackup means the r.file is backup file,
-// we need close file & clean page cache.
-func (r *Rotation) sync(isBackup bool) {
+// Close closes logro and release all resources.
+func (r *Rotation) Close() (err error) {
 
-	if r.buf != nil {
-		r.buf.Flush()
+	if !atomic.CompareAndSwapInt64(&r.isRunning, 1, 0) {
+		return
 	}
 
-	if r.file != nil {
-		r.syncJobs <- syncJob{r.file, r.dirtyOffset, r.dirtySize, isBackup}
+	r.stopLoop()
+
+	close(r.syncJobs)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.fileWritten = 0
+	r.dirty = 0
+	r.buf = nil
+
+	if r.f != nil { // Just in case.
+		return r.f.Close()
 	}
 
-	r.dirtyOffset += r.dirtySize
-	r.dirtySize = 0
+	return
+}
+
+func (r *Rotation) stopLoop() {
+	r.loopCancel()
+	r.loopWg.Wait()
+}
+
+func (r *Rotation) isClosed() bool {
+	return atomic.LoadInt64(&r.isRunning) == 0
 }
 
 type syncJob struct {
-	f        *os.File
-	offset   int64
-	size     int64
-	isBackup bool
+	f     *os.File
+	size  int64
+	isOld bool
 }
 
-func (r *Rotation) doSyncJob() {
+func (r *Rotation) syncLoop() {
 
-	for job := range r.syncJobs {
-		f, offset, size := job.f, job.offset, job.size
-		if size == 0 {
-			continue
-		}
-		fnc.FlushHint(f, offset, size)
-		if job.isBackup {
-			// Warning:
-			// 1. May drop too much cache,
-			// because log ship may still need the cache(a bit slower than writing).
-			// 2. May still has same cache,
-			// because these page cache haven't been flushed to disk.
-			fnc.DropCache(f, 0, r.conf.MaxSize)
-			f.Close()
+	defer r.loopWg.Done()
+
+	ctx, cancel := context.WithCancel(r.loopCtx)
+	defer cancel()
+
+	n := int64(0)
+	offset := int64(0)
+
+	for {
+		select {
+		case job := <-r.syncJobs:
+			if !job.isOld {
+				n += job.size
+				if n >= r.cfg.PerSyncSize {
+					fnc.FlushHint(job.f, offset, n)
+					offset += n
+					n = 0
+				}
+			} else {
+				fnc.FlushHint(job.f, 0, r.cfg.MaxSize)
+				fnc.DropCache(job.f, 0, r.cfg.MaxSize)
+				job.f.Close()
+
+				// Will have a new file in the next round.
+				offset = 0
+				n = 0
+			}
+
+		case <-ctx.Done():
+			return
 		}
 	}
-}
-
-func (r *Rotation) Close() (err error) {
-	return r.file.Close()
 }

@@ -25,41 +25,56 @@ type Backup struct {
 }
 
 // Backups implements heap interface.
-type Backups []Backup
+type Backups struct {
+	bs []Backup
+}
 
 func (b *Backups) Less(i, j int) bool {
-	return (*b)[i].ts < ((*b)[j].ts)
+	return (*b).bs[i].ts < ((*b).bs[j].ts)
 }
 
 func (b *Backups) Swap(i, j int) {
 	if i >= 0 && j >= 0 {
-		(*b)[i], (*b)[j] = (*b)[j], (*b)[i]
+		(*b).bs[i], (*b).bs[j] = (*b).bs[j], (*b).bs[i]
 	}
 }
 
 func (b *Backups) Len() int {
-	return len(*b)
+	return len((*b).bs)
 }
 
 func (b *Backups) Pop() (v interface{}) {
-	if b.Len()-1 >= 0 {
-		*b, v = (*b)[:b.Len()-1], (*b)[b.Len()-1]
+	if b.Len() > 0 {
+		v = (*b).bs[b.Len()-1]
+		b.bs = (*b).bs[:b.Len()-1]
 	}
 	return
 }
 
 func (b *Backups) Push(v interface{}) {
-	*b = append(*b, v.(Backup))
+	b.bs = append((*b).bs, v.(Backup))
+}
+
+func listBackups(outputPath string, max int) (*Backups, error) {
+	bs := make([]Backup, 0, max*2) // Enough cap.
+	b := &Backups{
+		bs: bs,
+	}
+	err := b.list(outputPath, max)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // List all backup log files (in init process),
 // and remove them if there are too many backups.
-func (b *Backups) list(outputPath string, max int) {
+func (b *Backups) list(outputPath string, max int) error {
 
 	dir := filepath.Dir(outputPath)
 	ns, err := ioutil.ReadDir(dir)
 	if err != nil {
-		return // Path error, ignore
+		return err // Path error
 	}
 
 	prefix, ext := getPrefixAndExt(outputPath)
@@ -78,6 +93,8 @@ func (b *Backups) list(outputPath string, max int) {
 		v := heap.Pop(b)
 		os.Remove(v.(Backup).fp)
 	}
+
+	return nil
 }
 
 // getPrefixAndExt returns the filename part and extension part from the rotation's filename.
@@ -91,8 +108,9 @@ func getPrefixAndExt(outputPath string) (prefix, ext string) {
 const backupTimeFmt = "2006-01-02T15:04:05.000Z0700"
 
 // parseTime extracts the formatted time from the filename by stripping off
-// the filename's prefix and extension. This prevents someone's filename from
-// confusing time.parse.
+// the filename's prefix and extension.
+//
+// Return 0 if the file is illegal logro backup file.
 func parseTime(fp, prefix, ext string) int64 {
 	filename := filepath.Base(fp)
 	if !strings.HasPrefix(filename, prefix) {

@@ -1,323 +1,246 @@
-/*
- * Copyright (c) 2019. Temple3x (temple3x@gmail.com)
- * Copyright (c) 2014 Nate Finch
- *
- * Use of this source code is governed by the MIT License
- * that can be found in the LICENSE file.
- */
+///*
+// * Copyright (c) 2019. Temple3x (temple3x@gmail.com)
+// * Copyright (c) 2014 Nate Finch
+// *
+// * Use of this source code is governed by the MIT License
+// * that can be found in the LICENSE file.
+// */
 
 package logro
 
 import (
-	"bufio"
+	"bytes"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"go.uber.org/goleak"
 )
 
-func TestNewCreate(t *testing.T) {
+var testConfig = &Config{
+	MaxSize:     32,
+	BufSize:     4,
+	PerSyncSize: 16,
+	Developed:   true,
+}
+
+type testEnv struct {
+	dir string
+	fp  string
+	r   *Rotation
+}
+
+func makeTestEnv() (e *testEnv, err error) {
 	dir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	defer os.Remove(dir)
-	fp := filepath.Join(dir, "a.log")
-	defer os.Remove(fp)
-
-	_, err = New(&Config{
-		OutputPath: fp,
-	})
+	fp := filepath.Join(dir, "logro-test.log")
+	testConfig.OutputPath = fp
+	r, err := New(testConfig)
 	if err != nil {
-		t.Fatal(err)
+		return
+	}
+	return &testEnv{
+		dir: dir,
+		fp:  fp,
+		r:   r,
+	}, nil
+}
+
+func (e *testEnv) clear() {
+	e.r.Close()
+	os.RemoveAll(e.dir)
+}
+
+type testRotation struct {
+	*testing.T
+	r *Rotation
+}
+
+func runTests(t *testing.T, tests ...func(tr *testRotation)) {
+
+	for _, test := range tests {
+		e, err := makeTestEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		tr := &testRotation{
+			T: t,
+			r: e.r,
+		}
+
+		test(tr)
+
+		e.clear()
 	}
 }
 
-func TestNewExist(t *testing.T) {
-	f, err := ioutil.TempFile(os.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
+func TestNew(t *testing.T) {
 
-	_, err = New(&Config{
-		OutputPath: f.Name(),
-	})
-	if err != nil {
-		t.Fatal(err)
+	fn := func(tr *testRotation) {
+		// Just new, do nothing.
 	}
-}
-
-func TestAlignToPage(t *testing.T) {
-	for i := 1; i <= pageSize; i++ {
-		if alignToPage(int64(i)) != pageSize {
-			t.Fatal("align mismatch")
-		}
-	}
-	for i := pageSize + 1; i < pageSize*2; i++ {
-		if alignToPage(int64(i)) != pageSize*2 {
-			t.Fatal("align mismatch")
-		}
-	}
+	runTests(t, fn)
 }
 
 func TestRotation_Write(t *testing.T) {
-	f, err := ioutil.TempFile(os.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
 
-	r, err := New(&Config{
-		OutputPath: f.Name(),
-		Developed:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bufSize := 8
-	r.buf = bufio.NewWriterSize(r.file, bufSize)
-	for i := 0; i < bufSize; i++ {
-		written, err := r.Write([]byte{'1'})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if written != 1 {
-			t.Fatal("written mismatch")
-		}
-		if r.dirtySize != int64(i+1) {
-			t.Fatal("dirty size mismatch")
-		}
-		if r.dirtyOffset != 0 {
-			t.Fatal("dirty offset mismatch")
-		}
-		if r.fsize != int64(i+1) {
-			t.Fatal("fsize mismatch")
+	fn := func(tr *testRotation) {
+		r := tr.r
+		for i := 0; i < int(r.cfg.MaxSize+1); i++ {
+			n, err := r.Write([]byte{'1'})
+			if err != nil {
+				tr.Fatal(err)
+			}
+			if n != 1 {
+				tr.Fatal("written mismatch")
+			}
 		}
 	}
-
-	stat, err := r.file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stat.Size() != 0 {
-		t.Fatal("true fsize mismatch")
-	}
+	runTests(t, fn)
 }
 
 func TestRotation_Sync(t *testing.T) {
-	f, err := ioutil.TempFile(os.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
+	fn := func(tr *testRotation) {
+		r := tr.r
 
-	r, err := New(&Config{
-		OutputPath: f.Name(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	n := 8
-	for i := 0; i < n; i++ {
-		written, err := r.Write([]byte{'1'})
-		if err != nil {
-			t.Fatal(err)
+		p := make([]byte, r.cfg.MaxSize)
+		rand.Read(p)
+		for i := 0; i < int(r.cfg.MaxSize); i++ {
+			n, err := r.Write([]byte{p[i]})
+			if err != nil {
+				tr.Fatal(err)
+			}
+			if n != 1 {
+				tr.Fatal("written mismatch")
+			}
 		}
-		if written != 1 {
-			t.Fatal("written mismatch")
-		}
-		if r.dirtySize != int64(i+1) {
-			t.Fatal("dirty size mismatch")
-		}
-		if r.dirtyOffset != 0 {
-			t.Fatal("dirty offset mismatch")
-		}
-		if r.fsize != int64(i+1) {
-			t.Fatal("fsize mismatch")
+		r.Sync()
+		if !isMatchFileContent(p, r.cfg.OutputPath) {
+			tr.Fatal("log file content mismatch")
 		}
 	}
-	r.Sync()
-	stat, err := r.file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stat.Size() != int64(n) {
-		t.Fatal("true fsize mismatch")
-	}
+	runTests(t, fn)
 }
 
-// dirty_size >= BytesPerSync
-func TestRotation_AutoSync(t *testing.T) {
-	f, err := ioutil.TempFile(os.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
+// check no goroutine leak
+func TestRotation_Close(t *testing.T) {
 
-	mb = 1
-	bytesPerSync := int64(7)
-	r, err := New(&Config{
-		OutputPath:   f.Name(),
-		Developed:    true,
-		BytesPerSync: bytesPerSync,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	n := bytesPerSync
-	for i := int64(0); i < n; i++ {
-		written, err := r.Write([]byte{'1'})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if written != 1 {
-			t.Fatal("written mismatch")
-		}
-		if r.fsize != i+1 {
-			t.Fatal("fsize mismatch")
-		}
-
-		if i < n-1 {
-			if r.dirtySize != i+1 {
-				t.Fatal("dirty size mismatch", r.dirtySize, i)
+	defer goleak.VerifyNone(t)
+	fn := func(tr *testRotation) {
+		r := tr.r
+		for i := 0; i < int(r.cfg.MaxSize+1); i++ {
+			n, err := r.Write([]byte{'1'})
+			if err != nil {
+				tr.Fatal(err)
 			}
-			if r.dirtyOffset != 0 {
-				t.Fatal("dirty offset mismatch")
-			}
-		} else {
-			if r.dirtySize != 0 {
-				t.Fatal("dirty size mismatch")
-			}
-			if r.dirtyOffset != bytesPerSync {
-				t.Fatal("dirty offset mismatch")
+			if n != 1 {
+				tr.Fatal("written mismatch")
 			}
 		}
 	}
-
-	stat, err := r.file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stat.Size() != n {
-		t.Fatal("true fsize mismatch")
-	}
+	runTests(t, fn)
 }
 
-// Written >= MaxSize
+// Written > MaxSize, should open a new log file.
 func TestRotation_WriteMaxSize(t *testing.T) {
-	f, err := ioutil.TempFile(os.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
 
-	mb = 1
-	bytesPerSync := int64(7)
-	maxSize := bytesPerSync * 2
-	r, err := New(&Config{
-		OutputPath:   f.Name(),
-		Developed:    true,
-		BytesPerSync: bytesPerSync,
-		MaxSize:      maxSize,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	fn := func(tr *testRotation) {
+		r := tr.r
+		p := make([]byte, r.cfg.MaxSize+1)
+		rand.Read(p)
 
-	n := maxSize
-	for i := int64(0); i < n; i++ {
-		_, err := r.Write([]byte{'1'})
-		if err != nil {
-			t.Fatal(err)
+		for i := 0; i < len(p); i++ {
+			n, err := r.Write([]byte{p[i]})
+			if err != nil {
+				tr.Fatal(err)
+			}
+			if n != 1 {
+				tr.Fatal("written mismatch")
+			}
+		}
+
+		oldFP := r.backups.Pop().(Backup).fp
+
+		if !isMatchFileSize(r.cfg.MaxSize, oldFP) {
+			tr.Fatal("log file size mismatch")
+		}
+
+		if !isMatchFileContent(p[:r.cfg.MaxSize], oldFP) {
+			tr.Fatal("log file content mismatch")
 		}
 	}
-
-	if r.Backups.Len() != 1 {
-		t.Fatal("backups mismatch", r.Backups.Len())
-	}
-	if r.fsize != 0 {
-		t.Fatal("fsize mismatch")
-	}
-	stat, err := r.file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stat.Size() != 0 {
-		t.Fatal("true fsize mismatch")
-	}
-
-	// Write one more.
-	_, err = r.Write([]byte{'1'})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.fsize != 1 {
-		t.Fatal("fsize mismatch")
-	}
-	stat, err = r.file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stat.Size() != 0 {
-		t.Fatal("true fsize mismatch")
-	}
-	r.Sync()
-	stat, err = r.file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stat.Size() != 1 {
-		t.Fatal("true fsize mismatch")
-	}
+	runTests(t, fn)
 }
 
-// Written >= MaxSize in Concurrency
-func TestRotation_WriteMaxSizeConcurrency(t *testing.T) {
-	f, err := ioutil.TempFile(os.TempDir(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
+// Written > MaxSize, should open a new log file. ( Write concurrent)
+func TestRotation_WriteMaxSizeConcurrent(t *testing.T) {
 
-	mb = 1
-	bytesPerSync := int64(7)
-	maxSize := bytesPerSync * 2
-	r, err := New(&Config{
-		OutputPath:   f.Name(),
-		Developed:    true,
-		BytesPerSync: bytesPerSync,
-		MaxSize:      maxSize,
-	})
+	fn := func(tr *testRotation) {
+		r := tr.r
+		pLen := r.cfg.MaxSize + 2
+		p := make([]byte, pLen)
+		rand.Read(p)
+
+		var wg sync.WaitGroup
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				for i, v := range p[int64(i)*pLen/2 : int64(i)*pLen/2+pLen/2] {
+					n, err := r.Write([]byte{v})
+					if err != nil {
+						tr.Fatal(err, i)
+					}
+					if n != 1 {
+						tr.Fatal("written mismatch")
+					}
+				}
+
+			}(i)
+		}
+		wg.Wait()
+
+		oldFP := r.backups.Pop().(Backup).fp
+
+		if !isMatchFileSize(r.cfg.MaxSize, oldFP) {
+			tr.Fatal("log file size mismatch")
+		}
+	}
+	runTests(t, fn)
+}
+
+func isMatchFileSize(size int64, output string) bool {
+	f, err := os.OpenFile(output, os.O_RDONLY, 0600)
 	if err != nil {
-		t.Fatal(err)
+		return false
+	}
+	defer f.Close()
+
+	fs, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return size == fs.Size()
+}
+
+func isMatchFileContent(p []byte, output string) bool {
+	f, err := os.OpenFile(output, os.O_RDONLY, 0600)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	act := make([]byte, len(p))
+	_, err = f.Read(act)
+	if err != nil {
+		return false
 	}
 
-	n := maxSize
-	wg := new(sync.WaitGroup)
-	wg.Add(int(n))
-	for i := int64(0); i < n; i++ {
-		go func() {
-			defer wg.Done()
-			r.Write([]byte{'1'})
-		}()
-	}
-	wg.Wait()
-	if r.Backups.Len() != 1 {
-		t.Fatal("backups mismatch", r.Backups.Len())
-	}
-	if r.fsize != 0 {
-		t.Fatal("fsize mismatch")
-	}
-	stat, err := r.file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stat.Size() != 0 {
-		t.Fatal("true fsize mismatch")
-	}
+	return bytes.Equal(p, act)
 }
