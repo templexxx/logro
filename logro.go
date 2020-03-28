@@ -319,5 +319,6 @@ func (r *Rotation) doSyncJob() {
 }
 
 func (r *Rotation) Close() (err error) {
+	// TODO exit goroutine flush all
 	return r.file.Close()
 }

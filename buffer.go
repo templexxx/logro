@@ -46,7 +46,7 @@ func (b *buffer) isAvailWrite(n int64) bool {
 // write writes len(p) bytes from p to the underlying buf.
 //
 // If there is no avail space to write return error and do nothing.
-func (b *buffer) Write(p []byte) (err error) {
+func (b *buffer) write(p []byte) (err error) {
 	if len(p) == 0 {
 		return nil
 	}
@@ -105,6 +105,11 @@ func (b *buffer) read(p []byte) (err error) {
 		return ErrNoAvailRead
 	}
 
+	b.readN(p, n)
+	return nil
+}
+
+func (b *buffer) readN(p []byte, n int64) {
 	if b.cons+n <= b.size {
 		copy(p, b.buf[b.cons:b.cons+n])
 	} else {
@@ -116,7 +121,6 @@ func (b *buffer) read(p []byte) (err error) {
 	b.cons = (b.cons + n) % b.size
 
 	b.isFull = false
-	return nil
 }
 
 // readAll reads all available data to p.
@@ -129,25 +133,9 @@ func (b *buffer) readAll(p []byte) int64 {
 		b.mu.Unlock()
 	}()
 
-	if b.prod == b.cons {
-		if b.isFull {
-			copy(p, b.buf)
-			return b.size
-		}
-		return 0
-	}
-
-	if b.prod > b.cons {
-		copy(p, b.buf[b.cons:b.prod])
-		return b.prod - b.cons
-	}
-
-	n := b.size - b.cons + b.prod
-	consToEnd := b.size - b.cons
-	copy(p, b.buf[b.cons:b.size])
-	copy(p[consToEnd:], b.buf[0:b.prod])
-
-	return n
+	avail := b.getAvailRead()
+	b.readN(p, avail)
+	return avail
 }
 
 // getAvailRead gets the length of available read bytes.
