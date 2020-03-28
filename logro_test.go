@@ -11,10 +11,13 @@ package logro
 import (
 	"bufio"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/templexxx/fnc"
 )
 
 func TestNewCreate(t *testing.T) {
@@ -150,7 +153,7 @@ func TestRotation_Sync(t *testing.T) {
 	}
 }
 
-// dirty_size >= BytesPerSync
+// dirty_size >= FlushSize
 func TestRotation_AutoSync(t *testing.T) {
 	f, err := ioutil.TempFile(os.TempDir(), "")
 	if err != nil {
@@ -161,9 +164,9 @@ func TestRotation_AutoSync(t *testing.T) {
 	mb = 1
 	bytesPerSync := int64(7)
 	r, err := New(&Config{
-		OutputPath:   f.Name(),
-		Developed:    true,
-		BytesPerSync: bytesPerSync,
+		OutputPath: f.Name(),
+		Developed:  true,
+		FlushSize:  bytesPerSync,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -220,10 +223,10 @@ func TestRotation_WriteMaxSize(t *testing.T) {
 	bytesPerSync := int64(7)
 	maxSize := bytesPerSync * 2
 	r, err := New(&Config{
-		OutputPath:   f.Name(),
-		Developed:    true,
-		BytesPerSync: bytesPerSync,
-		MaxSize:      maxSize,
+		OutputPath: f.Name(),
+		Developed:  true,
+		FlushSize:  bytesPerSync,
+		MaxSize:    maxSize,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -288,10 +291,10 @@ func TestRotation_WriteMaxSizeConcurrency(t *testing.T) {
 	bytesPerSync := int64(7)
 	maxSize := bytesPerSync * 2
 	r, err := New(&Config{
-		OutputPath:   f.Name(),
-		Developed:    true,
-		BytesPerSync: bytesPerSync,
-		MaxSize:      maxSize,
+		OutputPath: f.Name(),
+		Developed:  true,
+		FlushSize:  bytesPerSync,
+		MaxSize:    maxSize,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -320,4 +323,34 @@ func TestRotation_WriteMaxSizeConcurrency(t *testing.T) {
 	if stat.Size() != 0 {
 		t.Fatal("true fsize mismatch")
 	}
+}
+
+func BenchmarkWrite(b *testing.B) {
+
+	path, err := ioutil.TempDir(os.TempDir(), "logro-test")
+	if err != nil {
+		b.Fatal(err)
+	}
+	fn := filepath.Join(path, "write")
+
+	f, err := os.OpenFile(fn, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		b.Fatal(err)
+	}
+	f.Close()
+	defer os.RemoveAll(path)
+
+	p := make([]byte, 256)
+	rand.Read(p)
+
+	err = fnc.Flush(f, 0, 256)
+	b.Fatal(err) // TODO how about linux will panic?
+
+	buf := bufio.NewWriterSize(f, 32*1024)
+
+	b.SetBytes(256)
+	for i := 0; i < b.N; i++ {
+		buf.Write(p)
+	}
+
 }
