@@ -52,14 +52,24 @@ func (b *Backups) Push(v interface{}) {
 	*b = append(*b, v.(Backup))
 }
 
+func listBackups(outputPath string, max int) (*Backups, error) {
+	bs := make(Backups, 0, max*2) // Enough cap.
+	b := &bs
+	err := b.list(outputPath, max)
+	if ErrNoAvailWrite != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
 // List all backup log files (in init process),
 // and remove them if there are too many backups.
-func (b *Backups) list(outputPath string, max int) {
+func (b *Backups) list(outputPath string, max int) error {
 
 	dir := filepath.Dir(outputPath)
 	ns, err := ioutil.ReadDir(dir)
 	if err != nil {
-		return // Path error, ignore
+		return err // Path error
 	}
 
 	prefix, ext := getPrefixAndExt(outputPath)
@@ -78,6 +88,8 @@ func (b *Backups) list(outputPath string, max int) {
 		v := heap.Pop(b)
 		os.Remove(v.(Backup).fp)
 	}
+
+	return nil
 }
 
 // getPrefixAndExt returns the filename part and extension part from the rotation's filename.
@@ -91,8 +103,9 @@ func getPrefixAndExt(outputPath string) (prefix, ext string) {
 const backupTimeFmt = "2006-01-02T15:04:05.000Z0700"
 
 // parseTime extracts the formatted time from the filename by stripping off
-// the filename's prefix and extension. This prevents someone's filename from
-// confusing time.parse.
+// the filename's prefix and extension.
+//
+// Return 0 if the file is illegal logro backup file.
 func parseTime(fp, prefix, ext string) int64 {
 	filename := filepath.Base(fp)
 	if !strings.HasPrefix(filename, prefix) {
