@@ -42,8 +42,9 @@ func (b *Backups) Len() int {
 }
 
 func (b *Backups) Pop() (v interface{}) {
-	if b.Len()-1 >= 0 {
-		*b, v = (*b)[:b.Len()-1], (*b)[b.Len()-1]
+	if b.Len() > 0 {
+		v = (*b)[b.Len()-1]
+		*b = (*b)[:b.Len()-1]
 	}
 	return
 }
@@ -56,7 +57,7 @@ func listBackups(outputPath string, max int) (*Backups, error) {
 	bs := make(Backups, 0, max*2) // Enough cap.
 	b := &bs
 	err := b.list(outputPath, max)
-	if ErrNoAvailWrite != nil {
+	if err != nil {
 		return nil, err
 	}
 	return b, nil
@@ -84,7 +85,7 @@ func (b *Backups) list(outputPath string, max int) error {
 		}
 	}
 
-	for b.Len() > max {
+	for b.Len() > max { // TODO equal?
 		v := heap.Pop(b)
 		os.Remove(v.(Backup).fp)
 	}

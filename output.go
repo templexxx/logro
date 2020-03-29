@@ -71,7 +71,7 @@ func (o *output) open() (err error) {
 	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	f, err := fnc.OpenFile(fp, flag, 0644)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to create log file: %s", err.Error())
 	}
 	fnc.PreAllocate(f, o.maxSize)
 

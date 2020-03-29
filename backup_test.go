@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -23,74 +24,136 @@ func TestBackups_Heap(t *testing.T) {
 	s := make(Backups, 0, 3)
 	b := &s
 
-	if heap.Pop(b) != nil {
+	if heap.Pop(b) != nil || b.Len() != 0 {
 		t.Fatal("should be empty")
 	}
 
-	heap.Push(b, Backup{1, "fp1"})
-	if b.Len() != 1 {
-		t.Fatal("should has 1")
+	for i := 4; i >= 0; i-- {
+		heap.Push(b, Backup{ts: int64(i), fp: strconv.Itoa(i)})
 	}
 
-	v := heap.Pop(b).(Backup)
-	if v.ts != 1 || v.fp != "fp1" {
-		t.Fatal("value mismatch")
+	if b.Len() != 5 {
+		t.Fatal("len mismatch")
+	}
+
+	i := 0
+	for {
+		val := heap.Pop(b) // Pop min.
+		if val == nil {
+			break
+		}
+		v := val.(Backup)
+		if v.ts != int64(i) || v.fp != strconv.Itoa(i) {
+			t.Fatal("value mismatch", v.ts, i)
+		}
+		i++
 	}
 }
 
-func TestBackups_List(t *testing.T) {
-	s := make(Backups, 0, 3)
-	b := &s
+func TestListBackups(t *testing.T) {
+	testListBackupsPathError(t, 2)
+
+	for i := 0; i < 3*2; i++ {
+		testListBackups(t, i, 2)
+
+	}
+}
+
+func testListBackupsPathError(t *testing.T, maxBackups int) {
+
 	dir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(dir)
+	os.RemoveAll(dir)
 	fn := "a.log"
 	output := filepath.Join(dir, fn)
 
-	b.list(output, 1)
-	if b.Len() != 0 {
-		t.Fatal("should be empty")
+	b, err := listBackups(output, maxBackups)
+	if err == nil || b != nil {
+		t.Fatal("should raise path error")
+	}
+}
+
+func makeBackups(output string, n int) (TSs []int64, err error) {
+
+	TSs = make([]int64, n)
+	now := time.Now()
+	for i := 0; i < n; i++ {
+		fn, ts := makeBackupFP(output, false, now.Add(time.Second*time.Duration(int64(i))))
+		TSs[i] = ts
+		_, err = os.Create(fn)
+		if err != nil {
+			return
+		}
 	}
 
-	bf, _ := makeBackupFP(fn, false, time.Now())
-	_, err = os.Create(filepath.Join(dir, bf))
+	// Create some illegal backup log file/dir.
+	// listBackups should ignore them.
+	os.Mkdir(filepath.Join(filepath.Dir(output), "dir"), 0755)
+	os.Create(filepath.Join(filepath.Dir(output), "c.log"))
+	os.Create(filepath.Join(filepath.Dir(output), "a-c"))
+	os.Create(filepath.Join(filepath.Dir(output), "a-c.log"))
+	return
+}
+
+func testListBackups(t *testing.T, i, maxBackups int) {
+
+	dir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(bf)
-	b.list(output, 1)
-	if b.Len() != 1 {
+	defer os.RemoveAll(dir)
+
+	fn := "a.log"
+	output := filepath.Join(dir, fn)
+
+	TSs, err := makeBackups(output, i)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := listBackups(output, maxBackups)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cnt := maxBackups
+	if len(TSs) < maxBackups {
+		cnt = len(TSs)
+	}
+
+	if b.Len() != cnt {
 		t.Fatal("mismatch backups len")
 	}
-	heap.Pop(b)
-	time.Sleep(time.Millisecond)
-	bf2, ts2 := makeBackupFP(fn, false, time.Now())
-	_, err = os.Create(filepath.Join(dir, bf2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(bf2)
-	b.list(output, 1)
-	if b.Len() != 1 {
-		t.Fatal("mismatch backups len", b.Len())
-	}
 
-	if heap.Pop(b).(Backup).ts != ts2 {
-		t.Fatal("mismatch backups ts")
+	TSs = TSs[len(TSs)-cnt:]
+	for _, ts := range TSs {
+
+		val := heap.Pop(b)
+		if val == nil {
+			break
+		}
+
+		if val.(Backup).ts != ts {
+			t.Fatal("mismatch backup ts")
+		}
 	}
 }
 
 func TestGetPrefixAndExt(t *testing.T) {
 	output := "a/b.log"
 	prefix, ext := getPrefixAndExt(output)
-	if prefix != "b-" || ext != ".log" {
-		t.Fatal("prefix/log mismatch")
+	if prefix != "b-" {
+		t.Fatal("prefix mismatch")
+	}
+
+	if ext != ".log" {
+		t.Fatal("ext mismatch")
 	}
 }
 
-func TestBackupFP(t *testing.T) {
+func TestMakeBackupFP(t *testing.T) {
 	now := time.Now()
 	fnBase := "a"
 	fnExt := ".log"
