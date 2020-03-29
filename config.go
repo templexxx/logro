@@ -48,7 +48,7 @@ var (
 
 // Default configs.
 var (
-	defaultBufSize       = 64 * mb
+	defaultBufSize       = 128 * mb
 	defaultFileWriteSize = 256 * kb
 	defaultFlushSize     = mb
 
@@ -85,7 +85,7 @@ func (c *Config) parse() {
 		c.FlushSize = c.FlushSize * kb
 	}
 
-	if c.BufSize <= 2*c.FileWriteSize || c.FlushSize <= 2*c.FileWriteSize {
+	if c.BufSize < 2*c.FileWriteSize || c.FlushSize < 2*c.FileWriteSize {
 		c.BufSize = defaultBufSize
 		c.FileWriteSize = defaultFileWriteSize
 		c.FlushSize = defaultFlushSize

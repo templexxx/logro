@@ -8,7 +8,9 @@
 
 package logro
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestConfigParse(t *testing.T) {
 	cfg := new(Config)
@@ -32,6 +34,29 @@ func TestConfigParse(t *testing.T) {
 
 	if cfg.FlushSize != defaultFlushSize {
 		t.Fatal("mismatch")
+	}
+}
+
+func TestConfigDevelop(t *testing.T) {
+	bufSize := int64(64)
+	kb = 1
+	mb = 1
+	cfg := &Config{
+		Developed:     true,
+		MaxSize:       bufSize * 2,
+		BufSize:       bufSize,
+		FileWriteSize: bufSize / 2,
+		FlushSize:     bufSize,
+	}
+	cfg.parse()
+	if cfg.BufSize != bufSize {
+		t.Fatal("bufSize mismatch")
+	}
+	if cfg.FileWriteSize != bufSize/2 {
+		t.Fatal("fileWriteSize mismatch")
+	}
+	if cfg.FlushSize != bufSize {
+		t.Fatal("flushSzie mismatch")
 	}
 }
 

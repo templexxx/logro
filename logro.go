@@ -90,7 +90,7 @@ func (r *Rotation) startLoop() {
 	go r.flushLoop()
 }
 
-// Write data to log file.
+// Write writes data to buffer then notify file write.
 func (r *Rotation) Write(p []byte) (written int, err error) {
 
 	if r.isClosed() {
@@ -109,6 +109,7 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 	return
 }
 
+// Sync syncs data by notify file write.
 func (r *Rotation) Sync() (err error) {
 
 	if r.isClosed() {
@@ -120,6 +121,7 @@ func (r *Rotation) Sync() (err error) {
 }
 
 // TODO check goroutine leak
+// Close closes logro and release all resources.
 func (r *Rotation) Close() (err error) {
 
 	if !atomic.CompareAndSwapInt64(&r.isRunning, 1, 0) {
@@ -151,6 +153,7 @@ func (r *Rotation) fileWriteLoop() {
 
 	for {
 		select {
+
 		case job := <-r.fileWriteJobs:
 			if job != 0 {
 				n += job
@@ -161,41 +164,45 @@ func (r *Rotation) fileWriteLoop() {
 						n = r.buf.readAll(p)
 						p0 = p[:n]
 					}
-					r.fileWrite(r.output, written, p0)
-					written += n
+					r.fileWrite(r.output, &written, p0)
 					n = 0
 				}
 			} else {
 				n = r.buf.readAll(p)
 				p0 := p[:n]
-				r.fileWrite(r.output, written, p0)
-				written += n
+				r.fileWrite(r.output, &written, p0)
 				n = 0
 			}
+
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (r *Rotation) fileWrite(out *output, written int64, p []byte) {
-	fw, err := out.f.WriteAt(p, written)
-	if err == nil {
+func (r *Rotation) fileWrite(out *output, written *int64, p []byte) {
+
+	if *written >= r.cfg.MaxSize {
+		*written = 0
 		f := out.f
-		isOld := false
-
-		if written >= r.cfg.MaxSize {
-			isOld = true
-			err := out.open()
-			if err != nil {
-				r.Close()
-			}
+		err1 := out.open()
+		if err1 != nil {
+			r.Close()
+			return
 		}
-
 		r.flushJobs <- flushJob{
 			f:     f,
-			size:  int64(fw),
-			isOld: isOld,
+			size:  0,
+			isOld: true,
+		}
+	}
+
+	fw, err := out.f.Write(p)
+	if err == nil {
+		*written += int64(fw)
+		r.flushJobs <- flushJob{
+			f:    out.f,
+			size: int64(fw),
 		}
 	}
 }
@@ -227,6 +234,7 @@ func (r *Rotation) flushLoop() {
 					n = 0
 				}
 			} else {
+				fnc.FlushHint(job.f, flushed, n)
 				// Warning:
 				// 1. May drop too much cache,
 				// because log ship may still need the cache(a bit slower than writing).
@@ -234,6 +242,8 @@ func (r *Rotation) flushLoop() {
 				// because these dirty page cache haven't been flushed to disk or file size is bigger than MaxSize.
 				fnc.DropCache(job.f, 0, r.cfg.MaxSize)
 				job.f.Close()
+				flushed = 0
+				n = 0
 			}
 
 		case <-ctx.Done():

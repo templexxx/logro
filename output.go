@@ -68,12 +68,13 @@ func (o *output) open() (err error) {
 	// Truncate here to clean up file content if someone else creates
 	// the file between exist checking and create file.
 	// Can't use os.O_EXCL here, because it may break rotation process.
-	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	//
+	// Most of log shippers monitor file size, and APPEND only can avoid Read-Modify-Write.
+	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC | os.O_APPEND
 	f, err := fnc.OpenFile(fp, flag, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to create log file: %s", err.Error())
 	}
-	fnc.PreAllocate(f, o.maxSize)
 
 	o.f = f
 	return
