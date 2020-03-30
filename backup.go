@@ -85,7 +85,7 @@ func (b *Backups) list(outputPath string, max int) error {
 		}
 	}
 
-	for b.Len() > max { // TODO equal?
+	for b.Len() > max {
 		v := heap.Pop(b)
 		os.Remove(v.(Backup).fp)
 	}

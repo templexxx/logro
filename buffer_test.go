@@ -288,5 +288,3 @@ func TestConcurrentWriteRead(t *testing.T) {
 		t.Fatal("write read size mismatch")
 	}
 }
-
-// TODO bench IO and IOPS

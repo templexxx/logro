@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -237,7 +238,7 @@ func TestRotation_WriteMaxSize(t *testing.T) {
 	rand.Read(p)
 
 	for i, v := range p {
-		time.Sleep(time.Millisecond) // Avoid too fast write.
+		time.Sleep(time.Microsecond) // Avoid too fast write.
 		written, err := r.Write([]byte{v})
 		if err != nil {
 			t.Fatal(err, i)
@@ -253,6 +254,76 @@ func TestRotation_WriteMaxSize(t *testing.T) {
 	if !isMatchFileContent(p[cfg.MaxSize:], fp) {
 		t.Fatal("log file content mismatch")
 	}
+}
+
+// Written > MaxSize, should open a new log file. ( Write concurrent)
+func TestRotation_WriteMaxSizeConcurrent(t *testing.T) {
+	dir, err := ioutil.TempDir(os.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	fp := filepath.Join(dir, "a.log")
+
+	kb = 1
+	mb = 1
+	bufSize := int64(64)
+	cfg := &Config{
+		OutputPath:    fp,
+		Developed:     true,
+		MaxSize:       bufSize,
+		BufSize:       bufSize,
+		FileWriteSize: bufSize / 2,
+		FlushSize:     bufSize,
+	}
+	r, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	pLen := cfg.MaxSize + cfg.FileWriteSize
+	p := make([]byte, pLen)
+	rand.Read(p)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			defer wg.Done()
+			for i, v := range p[int64(i)*pLen/2 : int64(i)*pLen/2+pLen/2] {
+				time.Sleep(time.Microsecond) // Avoid too fast write.
+				_, err := r.Write([]byte{v})
+				if err != nil {
+					t.Fatal(err, i)
+				}
+			}
+
+		}(i)
+	}
+
+	wg.Wait()
+
+	time.Sleep(time.Second)
+
+	if !isMatchFileSize(cfg.FileWriteSize, fp) {
+		t.Fatal("log file size mismatch")
+	}
+}
+
+func isMatchFileSize(size int64, output string) bool {
+	f, err := os.OpenFile(output, os.O_RDONLY, 0600)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	fs, err := f.Stat()
+	if err != nil {
+		return false
+	}
+
+	return size == fs.Size()
 }
 
 func isMatchFileContent(p []byte, output string) bool {
@@ -271,7 +342,6 @@ func isMatchFileContent(p []byte, output string) bool {
 	return bytes.Equal(p, act)
 }
 
-// TODO Concurrent Test
 //
 //// Written >= MaxSize in Concurrency
 //func TestRotation_WriteMaxSizeConcurrency(t *testing.T) {
@@ -338,7 +408,7 @@ func isMatchFileContent(p []byte, output string) bool {
 //	rand.Read(p)
 //
 //	err = fnc.Flush(f, 0, 256)
-//	b.Fatal(err) // TODO how about linux will panic?
+//	b.Fatal(err)
 //
 //	buf := bufio.NewWriterSize(f, 32*1024)
 //
@@ -348,5 +418,3 @@ func isMatchFileContent(p []byte, output string) bool {
 //	}
 //
 //}
-
-// TODO bench test, output like jfse, and compare lumjack, and old version. input should > maxSize

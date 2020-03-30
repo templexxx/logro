@@ -100,7 +100,7 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 	written = len(p)
 	err = r.buf.write(p)
 	if err != nil {
-		r.fileWriteJobs <- 0
+		r.fileWriteJobs <- 0 // If buf is full, notify fileWriteLoop to read all buf.
 		return
 	}
 
@@ -120,7 +120,6 @@ func (r *Rotation) Sync() (err error) {
 	return
 }
 
-// TODO check goroutine leak
 // Close closes logro and release all resources.
 func (r *Rotation) Close() (err error) {
 
@@ -138,6 +137,15 @@ func (r *Rotation) Close() (err error) {
 	}
 
 	return
+}
+
+func (r *Rotation) stopLoop() {
+	r.loopCancel()
+	r.loopWg.Wait()
+}
+
+func (r *Rotation) isClosed() bool {
+	return atomic.LoadInt64(&r.isRunning) == 0
 }
 
 func (r *Rotation) fileWriteLoop() {
@@ -250,13 +258,4 @@ func (r *Rotation) flushLoop() {
 			return
 		}
 	}
-}
-
-func (r *Rotation) stopLoop() {
-	r.loopCancel()
-	r.loopWg.Wait()
-}
-
-func (r *Rotation) isClosed() bool {
-	return atomic.LoadInt64(&r.isRunning) == 0
 }
