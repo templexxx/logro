@@ -72,8 +72,9 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 	r.output = out
 
 	r.buf = newBuffer(r.cfg.BufSize)
-	r.fileWriteJobs = make(chan int64, 256)
-	r.flushJobs = make(chan flushJob, 256)
+	// TODO should bigger?
+	r.fileWriteJobs = make(chan int64, 128)
+	r.flushJobs = make(chan flushJob, 4096)
 
 	return
 }
