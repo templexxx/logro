@@ -54,6 +54,9 @@ func TestWritePerf(t *testing.T) {
 	// TODO logro different filewritesize flushsize
 	// TODO add direct write
 	// TODO add write with a buf
+	// TODO compare lumjeck
+	// TODO may should care latency more
+	// TODO how fast the write will not return error?
 }
 
 func testLogroWritePerf(t *testing.T) {
