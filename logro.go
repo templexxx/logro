@@ -26,7 +26,8 @@ type Rotation struct {
 
 	output *output
 
-	buf *buffer
+	buf      *buffer
+	bufDirty int64 // unsent to writeFileLoop size.
 	// Notify file write, value is write bytes size,
 	// 0 means write all bytes in buffer.
 	fileWriteJobs chan int64
@@ -105,7 +106,13 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 		return
 	}
 
-	r.fileWriteJobs <- int64(written)
+	bufDirty := atomic.AddInt64(&r.bufDirty, int64(written))
+	if bufDirty >= r.cfg.FileWriteSize {
+		r.fileWriteJobs <- 0
+		atomic.StoreInt64(&r.bufDirty, 0)
+	}
+
+	//r.fileWriteJobss <- int64(written)
 
 	return
 }

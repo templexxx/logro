@@ -44,13 +44,13 @@ func init() {
 }
 
 func TestWritePerf(t *testing.T) {
-	//if !runPerf {
-	//	t.Skip("skip write perf tests, enable it by adding '-perf=true'")
-	//}
+	if !runPerf {
+		t.Skip("skip write perf tests, enable it by adding '-perf=true'")
+	}
+	// TODO why just run it faster?
 	t.Run("Logro-Buffer", testBufferWritePerf)
 	t.Run("Logro", testLogroWritePerf)
 	// TODO add bigger than buffer logro write
-	// TODO linux perf
 	// TODO logro different filewritesize flushsize
 	// TODO add direct write
 	// TODO add write with a buf
@@ -80,7 +80,7 @@ func testLogroWritePerf(t *testing.T) {
 	}
 	defer l.Close()
 
-	var bufSize int64 = 64 * 1024 * 1024
+	var bufSize int64 = 128 * 1024 * 1024
 	var blockSize int64 = 256
 	thread := runtime.NumCPU()
 	var size = bufSize / int64(thread)

@@ -208,6 +208,7 @@ func TestRotation_Sync_Background(t *testing.T) {
 	}
 }
 
+// TODO fix test
 // Written > MaxSize, should open a new log file.
 func TestRotation_WriteMaxSize(t *testing.T) {
 	dir, err := ioutil.TempDir(os.TempDir(), "")
@@ -256,6 +257,7 @@ func TestRotation_WriteMaxSize(t *testing.T) {
 	}
 }
 
+// TODO fix test
 // Written > MaxSize, should open a new log file. ( Write concurrent)
 func TestRotation_WriteMaxSizeConcurrent(t *testing.T) {
 	dir, err := ioutil.TempDir(os.TempDir(), "")
