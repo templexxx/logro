@@ -33,6 +33,7 @@ type buffer struct {
 }
 
 func newBuffer(size int64) *buffer {
+
 	return &buffer{
 		buf:  make([]byte, size),
 		size: size,

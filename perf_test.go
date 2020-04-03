@@ -78,7 +78,7 @@ func testNoBufWritePerf(t *testing.T) {
 	defer f.Close()
 
 	var total = 128 * mb
-	var blockSize int64 = 256 * KB
+	var blockSize int64 = 512 * KB
 	thread := runtime.NumCPU()
 	var size = total / int64(thread)
 
@@ -109,11 +109,11 @@ func testLogroWritePerf(t *testing.T) {
 	fn := "a.log"
 	fp := filepath.Join(dir, fn)
 
-	var bufSize int64 = 128
+	var bufSize int64 = 64
 
 	cfg := new(Config)
 	cfg.OutputPath = fp
-	cfg.FileWriteSize = 2048 // TODO why 64KB so different?
+	cfg.FileWriteSize = 256 // TODO why 64KB so different?
 	cfg.FlushSize = 8192 * 2
 	cfg.BufSize = bufSize
 
