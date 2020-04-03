@@ -10,6 +10,7 @@ package logro
 import (
 	"flag"
 	"fmt"
+	"github.com/templexxx/fnc"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -50,6 +51,7 @@ func TestWritePerf(t *testing.T) {
 	// TODO why just run it faster?
 	t.Run("Logro-Buffer", testBufferWritePerf)
 	t.Run("Logro", testLogroWritePerf)
+	t.Run("NoBuf", testNoBufWritePerf)
 	// TODO add bigger than buffer logro write
 	// TODO logro different filewritesize flushsize
 	// TODO add direct write
@@ -57,6 +59,44 @@ func TestWritePerf(t *testing.T) {
 	// TODO compare lumjeck
 	// TODO may should care latency more
 	// TODO how fast the write will not return error?
+}
+
+func testNoBufWritePerf(t *testing.T) {
+	dir, err := ioutil.TempDir(os.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	fn := "a.log"
+	fp := filepath.Join(dir, fn)
+
+	f, err := fnc.OpenFile(fp, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	var total = 128 * mb
+	var blockSize int64 = 256 * KB
+	thread := runtime.NumCPU()
+	var size = total / int64(thread)
+
+	var write func([]byte) (int64, error)
+	write = func(p []byte) (int64, error) {
+		n, err := f.Write(p)
+		return int64(n), err
+	}
+	result := runJob(write, blockSize, size, thread)
+	sec := result.cost.Seconds()
+	bw := float64(size*int64(thread)) / sec
+	iops := float64(result.submit) / sec
+	lat := time.Duration(result.cost.Nanoseconds() / result.submit)
+	// TODO add a printPerf func two type of print: one for buffer, one for logro
+	fmt.Printf("submit: %d, complete: %d, bufsize: %s, blocksize: %s, "+
+		"bandwidth: %s/s, io: %s, avg_iops: %.2f, avg_latency: %s, cost: %s thead: %d\n",
+		result.submit, result.submit-result.fail, byteToStr(float64(0*KB)), byteToStr(float64(blockSize)),
+		byteToStr(bw), byteToStr(float64(size*int64(thread))), iops, lat, result.cost.String(), thread)
 }
 
 func testLogroWritePerf(t *testing.T) {
@@ -69,12 +109,12 @@ func testLogroWritePerf(t *testing.T) {
 	fn := "a.log"
 	fp := filepath.Join(dir, fn)
 
-	var bufSize int64 = 8
+	var bufSize int64 = 128
 
 	cfg := new(Config)
 	cfg.OutputPath = fp
-	cfg.FileWriteSize = 64 // TODO why 64KB so different?
-	cfg.FlushSize = 8192
+	cfg.FileWriteSize = 2048 // TODO why 64KB so different?
+	cfg.FlushSize = 8192 * 2
 	cfg.BufSize = bufSize
 
 	l, err := New(cfg)
@@ -85,7 +125,7 @@ func testLogroWritePerf(t *testing.T) {
 
 	defer l.Close()
 
-	var total = 128*mb + mb
+	var total = 128 * mb
 	var blockSize int64 = 256
 	thread := runtime.NumCPU()
 	var size = total / int64(thread)
@@ -102,7 +142,7 @@ func testLogroWritePerf(t *testing.T) {
 	// TODO add a printPerf func two type of print: one for buffer, one for logro
 	fmt.Printf("submit: %d, complete: %d, bufsize: %s, blocksize: %s, "+
 		"bandwidth: %s/s, io: %s, avg_iops: %.2f, avg_latency: %s, cost: %s thead: %d\n",
-		result.submit, result.submit-result.fail, byteToStr(float64(bufSize)), byteToStr(float64(blockSize)),
+		result.submit, result.submit-result.fail, byteToStr(float64(bufSize*MB)), byteToStr(float64(blockSize)),
 		byteToStr(bw), byteToStr(float64(size*int64(thread))), iops, lat, result.cost.String(), thread)
 
 }

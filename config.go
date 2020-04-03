@@ -58,7 +58,7 @@ var (
 	defaultMaxBackups = 8
 )
 
-func (c *Config) parse() {
+func (c *Config) adjust() {
 
 	if c.MaxSize <= 0 {
 		c.MaxSize = defaultMaxSize

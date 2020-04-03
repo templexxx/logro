@@ -14,7 +14,7 @@ import (
 
 func TestConfigParse(t *testing.T) {
 	cfg := new(Config)
-	cfg.parse()
+	cfg.adjust()
 
 	if cfg.MaxSize != defaultMaxSize {
 		t.Fatal("mismatch")
@@ -48,7 +48,7 @@ func TestConfigDevelop(t *testing.T) {
 		FileWriteSize: bufSize / 2,
 		FlushSize:     bufSize,
 	}
-	cfg.parse()
+	cfg.adjust()
 	if cfg.BufSize != bufSize {
 		t.Fatal("bufSize mismatch")
 	}

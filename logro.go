@@ -58,7 +58,7 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 		return nil, errors.New("empty log file path")
 	}
 
-	cfg.parse()
+	cfg.adjust()
 
 	r = &Rotation{cfg: cfg}
 	bs, err := listBackups(cfg.OutputPath, cfg.MaxBackups)
@@ -75,7 +75,7 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 	r.buf = newBuffer(r.cfg.BufSize)
 	// TODO should bigger?
 	r.fileWriteJobs = make(chan int64, 128)
-	r.flushJobs = make(chan flushJob, 4096)
+	r.flushJobs = make(chan flushJob, 256)
 
 	return
 }
