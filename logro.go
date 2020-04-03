@@ -102,7 +102,6 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 	written = len(p)
 	err = r.buf.write(p)
 	if err != nil {
-		r.fileWriteJobs <- 0 // If buf is full, notify fileWriteLoop to read all buf.
 		return
 	}
 

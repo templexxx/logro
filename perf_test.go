@@ -44,9 +44,9 @@ func init() {
 }
 
 func TestWritePerf(t *testing.T) {
-	if !runPerf {
-		t.Skip("skip write perf tests, enable it by adding '-perf=true'")
-	}
+	//if !runPerf {
+	//	t.Skip("skip write perf tests, enable it by adding '-perf=true'")
+	//}
 	// TODO why just run it faster?
 	t.Run("Logro-Buffer", testBufferWritePerf)
 	t.Run("Logro", testLogroWritePerf)
@@ -69,21 +69,26 @@ func testLogroWritePerf(t *testing.T) {
 	fn := "a.log"
 	fp := filepath.Join(dir, fn)
 
+	var bufSize int64 = 8
+
 	cfg := new(Config)
 	cfg.OutputPath = fp
-	cfg.FileWriteSize = 64 * kb // TODO why 64KB so different?
-	cfg.FlushSize = 8 * mb
+	cfg.FileWriteSize = 64 // TODO why 64KB so different?
+	cfg.FlushSize = 8192
+	cfg.BufSize = bufSize
 
 	l, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fmt.Printf("cfg: %#v\n", cfg)
+
 	defer l.Close()
 
-	var bufSize int64 = 128 * 1024 * 1024
+	var total = 128*mb + mb
 	var blockSize int64 = 256
 	thread := runtime.NumCPU()
-	var size = bufSize / int64(thread)
+	var size = total / int64(thread)
 	var write func([]byte) (int64, error)
 	write = func(p []byte) (int64, error) {
 		n, err := l.Write(p)

@@ -85,7 +85,7 @@ func (c *Config) parse() {
 		c.FlushSize = c.FlushSize * kb
 	}
 
-	if c.BufSize < 2*c.FileWriteSize || c.FlushSize < 2*c.FileWriteSize {
+	if c.BufSize*1024 < 2*c.FileWriteSize || c.FlushSize < 2*c.FileWriteSize {
 		c.BufSize = defaultBufSize
 		c.FileWriteSize = defaultFileWriteSize
 		c.FlushSize = defaultFlushSize
