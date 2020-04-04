@@ -13,26 +13,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/templexxx/fnc"
 )
 
 type output struct {
-	fp      string
-	f       *os.File
-	maxSize int64
+	mu sync.RWMutex
+
+	fp string
+	_f *os.File
 
 	backups    *Backups
 	localTime  bool
 	maxBackups int
 }
 
-func newOutput(fp string, maxSize int64, backups *Backups, localTime bool, maxBackups int) *output {
+func newOutput(fp string, backups *Backups, localTime bool, maxBackups int) *output {
 	return &output{
-		fp:      fp,
-		f:       nil,
-		maxSize: maxSize,
+		fp: fp,
+		_f: nil,
 
 		backups:    backups,
 		localTime:  localTime,
@@ -52,11 +53,13 @@ func (o *output) open() (err error) {
 			return fmt.Errorf("failed to rename log file, output: %s backup: %s", fp, backupFP)
 		}
 
+		o.mu.Lock()
 		heap.Push(o.backups, Backup{t, backupFP})
 		if o.backups.Len() > o.maxBackups {
 			v := heap.Pop(o.backups)
 			os.Remove(v.(Backup).fp)
 		}
+		o.mu.Unlock()
 	}
 
 	// Create a new log file.
@@ -76,6 +79,15 @@ func (o *output) open() (err error) {
 		return fmt.Errorf("failed to create log file: %s", err.Error())
 	}
 
-	o.f = f
+	o.mu.Lock()
+	o._f = f
+	o.mu.Unlock()
 	return
+}
+
+func (o *output) getFile() *os.File {
+	o.mu.RLock()
+	f := o._f
+	o.mu.RUnlock()
+	return f
 }

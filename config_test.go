@@ -28,35 +28,27 @@ func TestConfigParse(t *testing.T) {
 		t.Fatal("mismatch")
 	}
 
-	if cfg.FileWriteSize != defaultFileWriteSize {
-		t.Fatal("mismatch")
-	}
-
-	if cfg.FlushSize != defaultFlushSize {
+	if cfg.PerSyncSize != defaultPerSyncSize {
 		t.Fatal("mismatch")
 	}
 }
 
 func TestConfigDevelop(t *testing.T) {
-	bufSize := int64(64)
-	kb = 1
-	mb = 1
 	cfg := &Config{
-		Developed:     true,
-		MaxSize:       bufSize * 2,
-		BufSize:       bufSize,
-		FileWriteSize: bufSize / 2,
-		FlushSize:     bufSize,
+		Developed:   true,
+		MaxSize:     1,
+		BufSize:     2,
+		PerSyncSize: 3,
 	}
 	cfg.adjust()
-	if cfg.BufSize != bufSize {
-		t.Fatal("bufSize mismatch")
+	if cfg.MaxSize != 1 {
+		t.Fatal("mismatch")
 	}
-	if cfg.FileWriteSize != bufSize/2 {
-		t.Fatal("fileWriteSize mismatch")
+	if cfg.BufSize != 2 {
+		t.Fatal("mismatch")
 	}
-	if cfg.FlushSize != bufSize {
-		t.Fatal("flushSzie mismatch")
+	if cfg.PerSyncSize != 3 {
+		t.Fatal("mismatch")
 	}
 }
 

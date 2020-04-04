@@ -24,14 +24,12 @@ type Rotation struct {
 
 	isRunning int64
 
-	output *output
+	output      *output
+	fileWritten int64
 
-	buf      *buffer
-	bufDirty int64 // unsent to writeFileLoop size.
-	// Notify file write, value is write bytes size,
-	// 0 means write all bytes in buffer.
-	fileWriteJobs chan int64
-	flushJobs     chan flushJob
+	buf      *bufIO
+	dirty    int64
+	syncJobs chan syncJob
 
 	ctx        context.Context
 	loopCtx    context.Context
@@ -65,17 +63,16 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 	if err != nil {
 		return
 	}
-	out := newOutput(cfg.OutputPath, cfg.MaxSize, bs, cfg.LocalTime, cfg.MaxBackups)
+	out := newOutput(cfg.OutputPath, bs, cfg.LocalTime, cfg.MaxBackups)
 	err = out.open()
 	if err != nil {
 		return
 	}
 	r.output = out
 
-	r.buf = newBuffer(r.cfg.BufSize)
+	r.buf = newBufIO(out.getFile(), int(r.cfg.BufSize))
 	// TODO should bigger?
-	r.fileWriteJobs = make(chan int64, 128)
-	r.flushJobs = make(chan flushJob, 256)
+	r.syncJobs = make(chan syncJob, 256)
 
 	return
 }
@@ -87,9 +84,8 @@ func (r *Rotation) run() {
 
 func (r *Rotation) startLoop() {
 	r.loopCtx, r.loopCancel = context.WithCancel(context.Background())
-	r.loopWg.Add(2)
-	go r.fileWriteLoop()
-	go r.flushLoop()
+	r.loopWg.Add(1)
+	go r.syncLoop()
 }
 
 // Write writes data to buffer then notify file write.
@@ -99,36 +95,68 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 		return
 	}
 
-	written = len(p)
-	err = r.buf.write(p)
+	written, fw, err := r.buf.write(p)
 	if err != nil {
 		return
 	}
+	atomic.AddInt64(&r.fileWritten, int64(fw))
+	atomic.AddInt64(&r.dirty, int64(fw))
 
-	bufDirty := atomic.AddInt64(&r.bufDirty, int64(written))
-	if bufDirty >= r.cfg.FileWriteSize {
-		r.fileWriteJobs <- 0
-		atomic.StoreInt64(&r.bufDirty, 0)
+	f := r.output.getFile()
+	// TODO should I compress fw?
+	dirty := atomic.LoadInt64(&r.dirty)
+	if dirty >= r.cfg.PerSyncSize {
+		r.syncJobs <- syncJob{
+			f:     f,
+			size:  dirty, // TODO may dirty too many
+			isOld: false,
+		}
+		atomic.CompareAndSwapInt64(&r.dirty, dirty, 0)
 	}
 
-	//r.fileWriteJobss <- int64(written)
+	if atomic.LoadInt64(&r.fileWritten) >= r.cfg.MaxSize {
+		err = r.output.open()
+		if err != nil {
+			atomic.StoreInt64(&r.fileWritten, 0)
+			return
+		}
+		r.buf.reset(r.output.getFile())
+		r.syncJobs <- syncJob{
+			f:     f,
+			size:  0,
+			isOld: true,
+		}
+		atomic.StoreInt64(&r.fileWritten, 0)
+	}
+	// TODO think about openNew later
 
 	return
 }
 
-// Sync syncs data by notify file write.
+// Sync syncs all dirty data.
 func (r *Rotation) Sync() (err error) {
 
 	if r.isClosed() {
 		return
 	}
 
-	r.fileWriteJobs <- 0
+	fw, err := r.buf.flushSafe()
+	if err != nil {
+		return
+	}
+
+	r.syncJobs <- syncJob{
+		f:     r.output.getFile(),
+		size:  int64(fw),
+		isOld: false,
+	}
 	return
 }
 
 // Close closes logro and release all resources.
 func (r *Rotation) Close() (err error) {
+
+	r.Sync() // Sync before close.
 
 	if !atomic.CompareAndSwapInt64(&r.isRunning, 1, 0) {
 		return
@@ -136,11 +164,10 @@ func (r *Rotation) Close() (err error) {
 
 	r.stopLoop()
 
-	close(r.fileWriteJobs)
-	close(r.flushJobs)
+	close(r.syncJobs)
 
-	if r.output.f != nil {
-		return r.output.f.Close()
+	if r.output._f != nil {
+		return r.output._f.Close()
 	}
 
 	return
@@ -155,80 +182,13 @@ func (r *Rotation) isClosed() bool {
 	return atomic.LoadInt64(&r.isRunning) == 0
 }
 
-func (r *Rotation) fileWriteLoop() {
-
-	defer r.loopWg.Done()
-
-	ctx, cancel := context.WithCancel(r.loopCtx)
-	defer cancel()
-
-	p := make([]byte, r.cfg.BufSize)
-	n := int64(0)
-	written := int64(0)
-
-	for {
-		select {
-
-		case job := <-r.fileWriteJobs:
-			if job != 0 {
-				n += job
-				if n >= r.cfg.FileWriteSize {
-					p0 := p[:n]
-					err := r.buf.read(p0)
-					if err != nil {
-						n = r.buf.readAll(p)
-						p0 = p[:n]
-					}
-					r.fileWrite(r.output, &written, p0)
-					n = 0
-				}
-			} else {
-				n = r.buf.readAll(p)
-				p0 := p[:n]
-				r.fileWrite(r.output, &written, p0)
-				n = 0
-			}
-
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (r *Rotation) fileWrite(out *output, written *int64, p []byte) {
-
-	if *written >= r.cfg.MaxSize {
-		*written = 0
-		f := out.f
-		err1 := out.open()
-		if err1 != nil {
-			r.Close()
-			return
-		}
-		r.flushJobs <- flushJob{
-			f:     f,
-			size:  0,
-			isOld: true,
-		}
-	}
-
-	fw, err := out.f.Write(p)
-	if err == nil {
-		*written += int64(fw)
-		r.flushJobs <- flushJob{
-			f:    out.f,
-			size: int64(fw),
-		}
-	}
-}
-
-type flushJob struct {
+type syncJob struct {
 	f     *os.File
 	size  int64
 	isOld bool
 }
 
-func (r *Rotation) flushLoop() {
+func (r *Rotation) syncLoop() {
 
 	defer r.loopWg.Done()
 
@@ -240,10 +200,10 @@ func (r *Rotation) flushLoop() {
 
 	for {
 		select {
-		case job := <-r.flushJobs:
+		case job := <-r.syncJobs:
 			if !job.isOld {
 				n += job.size
-				if n >= r.cfg.FlushSize {
+				if n >= r.cfg.PerSyncSize {
 					fnc.FlushHint(job.f, flushed, n)
 					flushed += n
 					n = 0
@@ -252,7 +212,7 @@ func (r *Rotation) flushLoop() {
 				fnc.FlushHint(job.f, flushed, n)
 				// Warning:
 				// 1. May drop too much cache,
-				// because log ship may still need the cache(a bit slower than writing).
+				// because log shipper may still need the cache(a bit slower than writing).
 				// 2. May still has some cache,
 				// because these dirty page cache haven't been flushed to disk or file size is bigger than MaxSize.
 				fnc.DropCache(job.f, 0, r.cfg.MaxSize)

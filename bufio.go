@@ -105,6 +105,13 @@ func (b *bufIO) flush() (flushed int, err error) {
 	return n, nil
 }
 
+func (b *bufIO) flushSafe() (flushed int, err error) {
+	b.mu.Lock()
+	flushed, err = b.flush()
+	b.mu.Unlock()
+	return
+}
+
 // avail returns how many bytes are unused in the buffer.
 func (b *bufIO) avail() int { return len(b.buf) - b.n }
 

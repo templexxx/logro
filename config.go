@@ -14,7 +14,7 @@ type Config struct {
 	OutputPath string `json:"output_path" toml:"output_path"`
 	// MaxSize is the maximum size of a log file before it gets rotated.
 	// Unit: MB.
-	// Default: 128.
+	// Default: 128 (128MB).
 	MaxSize int64 `json:"max_size_mb" toml:"max_size_mb"`
 	// MaxBackups is the maximum number of backup log files to retain.
 	MaxBackups int `json:"max_backups" toml:"max_backups"`
@@ -23,47 +23,54 @@ type Config struct {
 	LocalTime bool `json:"local_time" toml:"local_time"`
 
 	// BufSize is logro's write buffer size.
+	// Unit: KB.
+	// Default: 256 (256KB).
+	//
+	// Buffer is used for combining writes.
+	// The size of it should be aligned to page size,
+	// and it shouldn't be too large, because that may block logro write.
+	BufSize int64 `json:"buf_size" toml:"buf_size"`
+	// PerSyncSize flushes data to storage media(hint) every PerSyncSize.
 	// Unit: MB.
-	// Default: 64.
-	BufSize int64 `json:"buf_size_mb" toml:"buf_size_mb"`
-	// FileWriteSize writes data to file every FileWriteSize.
-	// Unit: KB.
-	// Default: 256.
-	FileWriteSize int64 `json:"file_write_size_kb" toml:"file_write_size_kb"`
-	// FlushSize flushes data to storage media(hint) every FlushSize.
-	// Unit: KB.
-	// Default: 1024.
-	FlushSize int64 `json:"flush_size_kb" toml:"flush_size_kb"`
+	// Default: 8 (8MB).
+	//
+	// Sync is working in background.
+	// The size of it should be aligned to page size,
+	// and it shouldn't be too large, avoiding burst I/O.
+	PerSyncSize int64 `json:"per_sync_size" toml:"per_sync_size"`
 
 	// Develop mode. Default is false.
 	// It' used for testing, if it's true, the page cache control unit could not be aligned to page cache size.
 	Developed bool `json:"developed" toml:"developed"`
 }
 
-// Use variables for tests easier.
-var (
+const (
 	kb int64 = 1024
-	mb int64 = 1024 * 1024
+	mb       = 1024 * kb
 )
 
 // Default configs.
 var (
-	defaultBufSize       = 128 * mb
-	defaultFileWriteSize = 256 * kb
-	defaultFlushSize     = mb
+	defaultBufSize     = 256 * kb
+	defaultPerSyncSize = 8 * mb
 
 	// We don't need to keep too many backups,
 	// in practice, log shipper will collect the logs.
 	defaultMaxSize    = 128 * mb
-	defaultMaxBackups = 8
+	defaultMaxBackups = 4
 )
 
 func (c *Config) adjust() {
 
+	k, m := kb, mb
+	if c.Developed {
+		k, m = 1, 1
+	}
+
 	if c.MaxSize <= 0 {
 		c.MaxSize = defaultMaxSize
 	} else {
-		c.MaxSize = c.MaxSize * mb
+		c.MaxSize = c.MaxSize * m
 	}
 	if c.MaxBackups <= 0 {
 		c.MaxBackups = defaultMaxBackups
@@ -72,28 +79,21 @@ func (c *Config) adjust() {
 	if c.BufSize <= 0 {
 		c.BufSize = defaultBufSize
 	} else {
-		c.BufSize = c.BufSize * mb
+		c.BufSize = c.BufSize * k
 	}
-	if c.FileWriteSize <= 0 {
-		c.FileWriteSize = defaultFileWriteSize
+	if c.PerSyncSize <= 0 {
+		c.PerSyncSize = defaultPerSyncSize
 	} else {
-		c.FileWriteSize = c.FileWriteSize * kb
-	}
-	if c.FlushSize <= 0 {
-		c.FlushSize = defaultFlushSize
-	} else {
-		c.FlushSize = c.FlushSize * kb
-	}
-
-	if c.BufSize*1024 < 2*c.FileWriteSize || c.FlushSize < 2*c.FileWriteSize {
-		c.BufSize = defaultBufSize
-		c.FileWriteSize = defaultFileWriteSize
-		c.FlushSize = defaultFlushSize
+		c.PerSyncSize = c.PerSyncSize * m
 	}
 
 	if !c.Developed {
+		if c.PerSyncSize < 2*c.BufSize {
+			c.PerSyncSize = 2 * c.BufSize
+		}
 		c.MaxSize = alignToPage(c.MaxSize)
-		c.FlushSize = alignToPage(c.FlushSize)
+		c.BufSize = alignToPage(c.BufSize)
+		c.PerSyncSize = alignToPage(c.PerSyncSize)
 	}
 }
 

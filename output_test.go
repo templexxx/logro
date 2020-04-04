@@ -22,7 +22,7 @@ func TestOutput_open(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	fn := "a.log"
+	fn := "test-logro.log"
 	fp := filepath.Join(dir, fn)
 
 	_, err = makeBackups(fp, 3)
@@ -35,14 +35,14 @@ func TestOutput_open(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	o := newOutput(fp, 4096, b, false, 2)
+	o := newOutput(fp, b, false, 2)
 
 	// open no exist.
 	err = o.open()
 	if err != nil {
 		t.Fatal(err)
 	}
-	f0 := o.f
+	f0 := o._f
 	defer f0.Close()
 
 	if f0.Name() != fp {
@@ -54,7 +54,7 @@ func TestOutput_open(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f1 := o.f
+	f1 := o._f
 	defer f1.Close()
 
 	if f1.Name() != fp {

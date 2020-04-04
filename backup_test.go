@@ -66,7 +66,7 @@ func testListBackupsPathError(t *testing.T, maxBackups int) {
 		t.Fatal(err)
 	}
 	os.RemoveAll(dir)
-	fn := "a.log"
+	fn := "logro-test.log"
 	output := filepath.Join(dir, fn)
 
 	b, err := listBackups(output, maxBackups)
@@ -105,7 +105,7 @@ func testListBackups(t *testing.T, i, maxBackups int) {
 	}
 	defer os.RemoveAll(dir)
 
-	fn := "a.log"
+	fn := "logro-test.log"
 	output := filepath.Join(dir, fn)
 
 	TSs, err := makeBackups(output, i)
@@ -155,7 +155,7 @@ func TestGetPrefixAndExt(t *testing.T) {
 
 func TestMakeBackupFP(t *testing.T) {
 	now := time.Now()
-	fnBase := "a"
+	fnBase := "logro-test"
 	fnExt := ".log"
 	fn := fnBase + fnExt
 

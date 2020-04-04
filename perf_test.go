@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2019. Temple3x (temple3x@gmail.com)
- *
- * Use of this source code is governed by the MIT License
- * that can be found in the LICENSE file.
+* Copyright (c) 2019. Temple3x (temple3x@gmail.com)
+*
+* Use of this source code is governed by the MIT License
+* that can be found in the LICENSE file.
  */
 
 package logro
@@ -10,7 +10,6 @@ package logro
 import (
 	"flag"
 	"fmt"
-	"github.com/templexxx/fnc"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -20,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/templexxx/fnc"
 )
 
 // TODO bench IO and IOPS
@@ -49,7 +50,6 @@ func TestWritePerf(t *testing.T) {
 	//	t.Skip("skip write perf tests, enable it by adding '-perf=true'")
 	//}
 	// TODO why just run it faster?
-	t.Run("Logro-Buffer", testBufferWritePerf)
 	t.Run("Logro", testLogroWritePerf)
 	t.Run("NoBuf", testNoBufWritePerf)
 	// TODO add bigger than buffer logro write
@@ -109,13 +109,10 @@ func testLogroWritePerf(t *testing.T) {
 	fn := "a.log"
 	fp := filepath.Join(dir, fn)
 
-	var bufSize int64 = 64
-
 	cfg := new(Config)
 	cfg.OutputPath = fp
-	cfg.FileWriteSize = 256 // TODO why 64KB so different?
-	cfg.FlushSize = 8192 * 2
-	cfg.BufSize = bufSize
+	bufSize := 256
+	cfg.BufSize = int64(bufSize)
 
 	l, err := New(cfg)
 	if err != nil {
@@ -142,32 +139,9 @@ func testLogroWritePerf(t *testing.T) {
 	// TODO add a printPerf func two type of print: one for buffer, one for logro
 	fmt.Printf("submit: %d, complete: %d, bufsize: %s, blocksize: %s, "+
 		"bandwidth: %s/s, io: %s, avg_iops: %.2f, avg_latency: %s, cost: %s thead: %d\n",
-		result.submit, result.submit-result.fail, byteToStr(float64(bufSize*MB)), byteToStr(float64(blockSize)),
+		result.submit, result.submit-result.fail, byteToStr(float64(cfg.BufSize)), byteToStr(float64(blockSize)),
 		byteToStr(bw), byteToStr(float64(size*int64(thread))), iops, lat, result.cost.String(), thread)
 
-}
-
-func testBufferWritePerf(t *testing.T) {
-
-	var bufSize int64 = 64 * 1024 * 1024
-	var blockSize int64 = 256
-	thread := runtime.NumCPU()
-	var size = bufSize / int64(thread)
-
-	buf := newBuffer(bufSize)
-	var write func([]byte) (int64, error)
-	write = func(p []byte) (int64, error) {
-		return 0, buf.write(p)
-	}
-	result := runJob(write, blockSize, size, thread)
-	sec := result.cost.Seconds()
-	bw := float64(size*int64(thread)) / sec
-	iops := float64(result.submit) / sec
-	lat := time.Duration(result.cost.Nanoseconds() / result.submit)
-	fmt.Printf("submit: %d, complete: %d, bufsize: %s, blocksize: %s, "+
-		"bandwidth: %s/s, io: %s, avg_iops: %.2f, avg_latency: %s, cost: %s thead: %d\n",
-		result.submit, result.submit-result.fail, byteToStr(float64(bufSize)), byteToStr(float64(blockSize)),
-		byteToStr(bw), byteToStr(float64(size*int64(thread))), iops, lat, result.cost.String(), thread)
 }
 
 func runJob(write func(p []byte) (int64, error), blockSize int64, size int64, thread int) jobResult {
