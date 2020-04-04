@@ -25,37 +25,41 @@ type Backup struct {
 }
 
 // Backups implements heap interface.
-type Backups []Backup
+type Backups struct {
+	bs []Backup
+}
 
 func (b *Backups) Less(i, j int) bool {
-	return (*b)[i].ts < ((*b)[j].ts)
+	return (*b).bs[i].ts < ((*b).bs[j].ts)
 }
 
 func (b *Backups) Swap(i, j int) {
 	if i >= 0 && j >= 0 {
-		(*b)[i], (*b)[j] = (*b)[j], (*b)[i]
+		(*b).bs[i], (*b).bs[j] = (*b).bs[j], (*b).bs[i]
 	}
 }
 
 func (b *Backups) Len() int {
-	return len(*b)
+	return len((*b).bs)
 }
 
 func (b *Backups) Pop() (v interface{}) {
 	if b.Len() > 0 {
-		v = (*b)[b.Len()-1]
-		*b = (*b)[:b.Len()-1]
+		v = (*b).bs[b.Len()-1]
+		b.bs = (*b).bs[:b.Len()-1]
 	}
 	return
 }
 
 func (b *Backups) Push(v interface{}) {
-	*b = append(*b, v.(Backup))
+	b.bs = append((*b).bs, v.(Backup))
 }
 
 func listBackups(outputPath string, max int) (*Backups, error) {
-	bs := make(Backups, 0, max*2) // Enough cap.
-	b := &bs
+	bs := make([]Backup, 0, max*2) // Enough cap.
+	b := &Backups{
+		bs: bs,
+	}
 	err := b.list(outputPath, max)
 	if err != nil {
 		return nil, err

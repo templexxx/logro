@@ -46,9 +46,9 @@ func init() {
 }
 
 func TestWritePerf(t *testing.T) {
-	//if !runPerf {
-	//	t.Skip("skip write perf tests, enable it by adding '-perf=true'")
-	//}
+	if !runPerf {
+		t.Skip("skip write perf tests, enable it by adding '-perf=true'")
+	}
 	// TODO why just run it faster?
 	t.Run("Logro", testLogroWritePerf)
 	t.Run("NoBuf", testNoBufWritePerf)
@@ -111,14 +111,15 @@ func testLogroWritePerf(t *testing.T) {
 
 	cfg := new(Config)
 	cfg.OutputPath = fp
-	bufSize := 256
+	bufSize := 64
 	cfg.BufSize = int64(bufSize)
+	cfg.PerSyncSize = 16
 
 	l, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("cfg: %#v\n", cfg)
+	//fmt.Printf("cfg: %#v\n", cfg)
 
 	defer l.Close()
 

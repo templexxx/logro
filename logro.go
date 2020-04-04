@@ -9,22 +9,30 @@
 package logro
 
 import (
+	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/templexxx/fnc"
 )
 
 // Rotation is implement io.WriteCloser interface with func Sync() (err error).
 type Rotation struct {
+	mu sync.Mutex
+
 	cfg *Config
 
 	isRunning int64
 
-	output      *output
+	backups *Backups
+
+	f           atomic.Value
 	fileWritten int64
 
 	buf      *bufIO
@@ -63,18 +71,64 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 	if err != nil {
 		return
 	}
-	out := newOutput(cfg.OutputPath, bs, cfg.LocalTime, cfg.MaxBackups)
-	err = out.open()
+	r.backups = bs
+
+	err = r.open()
 	if err != nil {
 		return
 	}
-	r.output = out
 
-	r.buf = newBufIO(out.getFile(), int(r.cfg.BufSize))
+	r.buf = newBufIO(r.getFile(), int(r.cfg.BufSize))
 	// TODO should bigger?
 	r.syncJobs = make(chan syncJob, 256)
 
 	return
+}
+
+// open opens a new log file.
+// If log file existed, move it to backups.
+func (r *Rotation) open() (err error) {
+
+	fp := r.cfg.OutputPath
+	if fnc.Exist(fp) { // File exist may happen in rotation process.
+		backupFP, t := makeBackupFP(fp, r.cfg.LocalTime, time.Now())
+		err = os.Rename(fp, backupFP)
+		if err != nil {
+			return fmt.Errorf("failed to rename log file, output: %s backup: %s", fp, backupFP)
+		}
+
+		r.mu.Lock()
+		heap.Push(r.backups, Backup{t, backupFP})
+		if r.backups.Len() > r.cfg.MaxBackups {
+			v := heap.Pop(r.backups)
+			os.Remove(v.(Backup).fp)
+		}
+		r.mu.Unlock()
+	}
+
+	// Create a new log file.
+	dir := filepath.Dir(fp)
+	err = os.MkdirAll(dir, 0755) // ensure we have created the right dir.
+	if err != nil {
+		return fmt.Errorf("failed to make dirs for log file: %s", err.Error())
+	}
+	// Truncate here to clean up file content if someone else creates
+	// the file between exist checking and create file.
+	// Can't use os.O_EXCL here, because it may break rotation process.
+	//
+	// Most of log shippers monitor file size, and APPEND only can avoid Read-Modify-Write.
+	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC | os.O_APPEND
+	f, err := fnc.OpenFile(fp, flag, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create log file: %s", err.Error())
+	}
+
+	r.f.Store(f)
+	return
+}
+
+func (r *Rotation) getFile() *os.File {
+	return r.f.Load().(*os.File)
 }
 
 func (r *Rotation) run() {
@@ -95,6 +149,8 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 		return
 	}
 
+	f := r.getFile()
+
 	written, fw, err := r.buf.write(p)
 	if err != nil {
 		return
@@ -102,33 +158,30 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 	atomic.AddInt64(&r.fileWritten, int64(fw))
 	atomic.AddInt64(&r.dirty, int64(fw))
 
-	f := r.output.getFile()
-	// TODO should I compress fw?
 	dirty := atomic.LoadInt64(&r.dirty)
 	if dirty >= r.cfg.PerSyncSize {
 		r.syncJobs <- syncJob{
 			f:     f,
-			size:  dirty, // TODO may dirty too many
+			size:  dirty,
 			isOld: false,
 		}
-		atomic.CompareAndSwapInt64(&r.dirty, dirty, 0)
+		atomic.StoreInt64(&r.dirty, 0) // May lost some dirty, but it's okay.
 	}
 
 	if atomic.LoadInt64(&r.fileWritten) >= r.cfg.MaxSize {
-		err = r.output.open()
+		err = r.open()
 		if err != nil {
-			atomic.StoreInt64(&r.fileWritten, 0)
+			atomic.StoreInt64(&r.fileWritten, 0) // Avoiding keeping recreating.
 			return
 		}
-		r.buf.reset(r.output.getFile())
+		r.buf.reset(r.getFile())
 		r.syncJobs <- syncJob{
 			f:     f,
 			size:  0,
 			isOld: true,
 		}
-		atomic.StoreInt64(&r.fileWritten, 0)
+		atomic.StoreInt64(&r.fileWritten, 0) // May cause file a bit bigger than MaxSize, but it's okay.
 	}
-	// TODO think about openNew later
 
 	return
 }
@@ -140,13 +193,14 @@ func (r *Rotation) Sync() (err error) {
 		return
 	}
 
+	f := r.getFile()
 	fw, err := r.buf.flushSafe()
 	if err != nil {
 		return
 	}
 
 	r.syncJobs <- syncJob{
-		f:     r.output.getFile(),
+		f:     f,
 		size:  int64(fw),
 		isOld: false,
 	}
@@ -156,8 +210,6 @@ func (r *Rotation) Sync() (err error) {
 // Close closes logro and release all resources.
 func (r *Rotation) Close() (err error) {
 
-	r.Sync() // Sync before close.
-
 	if !atomic.CompareAndSwapInt64(&r.isRunning, 1, 0) {
 		return
 	}
@@ -166,8 +218,12 @@ func (r *Rotation) Close() (err error) {
 
 	close(r.syncJobs)
 
-	if r.output._f != nil {
-		return r.output._f.Close()
+	atomic.StoreInt64(&r.fileWritten, 0)
+	atomic.StoreInt64(&r.dirty, 0)
+
+	f := r.getFile()
+	if f != nil {
+		return f.Close()
 	}
 
 	return

@@ -19,10 +19,9 @@ import (
 	"time"
 )
 
-// Test Backups(Heap)
 func TestBackups_Heap(t *testing.T) {
-	s := make(Backups, 0, 3)
-	b := &s
+	s := make([]Backup, 0, 3)
+	b := &Backups{bs: s}
 
 	if heap.Pop(b) != nil || b.Len() != 0 {
 		t.Fatal("should be empty")

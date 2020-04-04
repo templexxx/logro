@@ -10,13 +10,14 @@ package logro
 
 import (
 	"bytes"
-	"go.uber.org/goleak"
 	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"go.uber.org/goleak"
 )
 
 var testConfig = &Config{
@@ -121,7 +122,7 @@ func TestRotation_Sync(t *testing.T) {
 			}
 		}
 		r.Sync()
-		if !isMatchFileContent(p, r.output.fp) {
+		if !isMatchFileContent(p, r.cfg.OutputPath) {
 			tr.Fatal("log file content mismatch")
 		}
 	}
@@ -165,7 +166,7 @@ func TestRotation_WriteMaxSize(t *testing.T) {
 			}
 		}
 
-		oldFP := r.output.backups.Pop().(Backup).fp
+		oldFP := r.backups.Pop().(Backup).fp
 
 		if !isMatchFileSize(r.cfg.MaxSize, oldFP) {
 			tr.Fatal("log file size mismatch")
@@ -206,7 +207,7 @@ func TestRotation_WriteMaxSizeConcurrent(t *testing.T) {
 		}
 		wg.Wait()
 
-		oldFP := r.output.backups.Pop().(Backup).fp
+		oldFP := r.backups.Pop().(Backup).fp
 
 		if !isMatchFileSize(r.cfg.MaxSize, oldFP) {
 			tr.Fatal("log file size mismatch")
