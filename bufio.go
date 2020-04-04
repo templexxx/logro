@@ -12,7 +12,6 @@ package logro
 
 import (
 	"io"
-	"sync"
 )
 
 // bufIO implements buffering for an io.Writer object.
@@ -22,8 +21,6 @@ import (
 // flush method to guarantee all data has been forwarded to
 // the underlying io.Writer.
 type bufIO struct {
-	mu sync.Mutex
-
 	err error
 	buf []byte
 	n   int
@@ -40,9 +37,7 @@ func newBufIO(w io.Writer, size int) *bufIO {
 
 // reset resets io.Writer in bufIO, remains all buffered bytes.
 func (b *bufIO) reset(w io.Writer) {
-	b.mu.Lock()
 	b.w = w
-	b.mu.Unlock()
 }
 
 // write writes the contents of p into the buffer.
@@ -50,9 +45,6 @@ func (b *bufIO) reset(w io.Writer) {
 // it also returns an error explaining
 // why the write is short (caused by underlying io.Writer).
 func (b *bufIO) write(p []byte) (nn int, fw int, err error) {
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
 
 	for len(p) > b.avail() && b.err == nil {
 		var n int
@@ -103,13 +95,6 @@ func (b *bufIO) flush() (flushed int, err error) {
 	}
 	b.n = 0
 	return n, nil
-}
-
-func (b *bufIO) flushSafe() (flushed int, err error) {
-	b.mu.Lock()
-	flushed, err = b.flush()
-	b.mu.Unlock()
-	return
 }
 
 // avail returns how many bytes are unused in the buffer.

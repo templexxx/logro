@@ -65,13 +65,6 @@ Log shippers such as ELK's filebeat can set path to:
 Logro control rotation by file size only, it's simple and enough for the most cases.
 (Now we usually use log shippers to collect logs to databases,
 but not login machines and grep data)
-
-### Warning
-        
-1. The date in backup file name maybe not correct all the time.
-    (some log entries won't belong to this interval)    
-
-2. It will clean up log files when they are too many (see Config.MaxBackups).
     
 ## Example
 

@@ -32,13 +32,12 @@ type Rotation struct {
 
 	backups *Backups
 
-	f           atomic.Value
+	f           *os.File
 	fileWritten int64
+	dirty       int64
+	buf         *bufIO
 
-	buf      *bufIO
-	dirty    int64
-	syncJobs chan syncJob
-
+	syncJobs   chan syncJob
 	ctx        context.Context
 	loopCtx    context.Context
 	loopCancel func()
@@ -78,9 +77,8 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 		return
 	}
 
-	r.buf = newBufIO(r.getFile(), int(r.cfg.BufSize))
-	// TODO should bigger?
-	r.syncJobs = make(chan syncJob, 256)
+	r.buf = newBufIO(r.f, int(r.cfg.BufSize))
+	r.syncJobs = make(chan syncJob, 16)
 
 	return
 }
@@ -97,13 +95,11 @@ func (r *Rotation) open() (err error) {
 			return fmt.Errorf("failed to rename log file, output: %s backup: %s", fp, backupFP)
 		}
 
-		r.mu.Lock()
 		heap.Push(r.backups, Backup{t, backupFP})
 		if r.backups.Len() > r.cfg.MaxBackups {
 			v := heap.Pop(r.backups)
 			os.Remove(v.(Backup).fp)
 		}
-		r.mu.Unlock()
 	}
 
 	// Create a new log file.
@@ -123,12 +119,8 @@ func (r *Rotation) open() (err error) {
 		return fmt.Errorf("failed to create log file: %s", err.Error())
 	}
 
-	r.f.Store(f)
+	r.f = f
 	return
-}
-
-func (r *Rotation) getFile() *os.File {
-	return r.f.Load().(*os.File)
 }
 
 func (r *Rotation) run() {
@@ -149,38 +141,37 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 		return
 	}
 
-	f := r.getFile()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	written, fw, err := r.buf.write(p)
 	if err != nil {
 		return
 	}
-	atomic.AddInt64(&r.fileWritten, int64(fw))
-	atomic.AddInt64(&r.dirty, int64(fw))
+	r.fileWritten += int64(fw)
+	r.dirty += int64(fw)
 
-	dirty := atomic.LoadInt64(&r.dirty)
-	if dirty >= r.cfg.PerSyncSize {
+	if r.dirty >= r.cfg.PerSyncSize {
 		r.syncJobs <- syncJob{
-			f:     f,
-			size:  dirty,
+			f:     r.f,
+			size:  r.dirty,
 			isOld: false,
 		}
-		atomic.StoreInt64(&r.dirty, 0) // May lost some dirty, but it's okay.
+		r.dirty = 0
 	}
 
-	if atomic.LoadInt64(&r.fileWritten) >= r.cfg.MaxSize {
-		err = r.open()
-		if err != nil {
-			atomic.StoreInt64(&r.fileWritten, 0) // Avoiding keeping recreating.
-			return
-		}
-		r.buf.reset(r.getFile())
+	if r.fileWritten >= r.cfg.MaxSize {
+		r.fileWritten = 0 // Even open failed, could avoid keeping recreating.
 		r.syncJobs <- syncJob{
-			f:     f,
+			f:     r.f,
 			size:  0,
 			isOld: true,
 		}
-		atomic.StoreInt64(&r.fileWritten, 0) // May cause file a bit bigger than MaxSize, but it's okay.
+		err = r.open()
+		if err != nil {
+			return
+		}
+		r.buf.reset(r.f)
 	}
 
 	return
@@ -193,14 +184,16 @@ func (r *Rotation) Sync() (err error) {
 		return
 	}
 
-	f := r.getFile()
-	fw, err := r.buf.flushSafe()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	fw, err := r.buf.flush()
 	if err != nil {
 		return
 	}
 
 	r.syncJobs <- syncJob{
-		f:     f,
+		f:     r.f,
 		size:  int64(fw),
 		isOld: false,
 	}
@@ -218,12 +211,15 @@ func (r *Rotation) Close() (err error) {
 
 	close(r.syncJobs)
 
-	atomic.StoreInt64(&r.fileWritten, 0)
-	atomic.StoreInt64(&r.dirty, 0)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	f := r.getFile()
-	if f != nil {
-		return f.Close()
+	r.fileWritten = 0
+	r.dirty = 0
+	r.buf = nil
+
+	if r.f != nil { // Just in case.
+		return r.f.Close()
 	}
 
 	return
@@ -252,7 +248,7 @@ func (r *Rotation) syncLoop() {
 	defer cancel()
 
 	n := int64(0)
-	flushed := int64(0)
+	offset := int64(0)
 
 	for {
 		select {
@@ -260,20 +256,17 @@ func (r *Rotation) syncLoop() {
 			if !job.isOld {
 				n += job.size
 				if n >= r.cfg.PerSyncSize {
-					fnc.FlushHint(job.f, flushed, n)
-					flushed += n
+					fnc.FlushHint(job.f, offset, n)
+					offset += n
 					n = 0
 				}
 			} else {
-				fnc.FlushHint(job.f, flushed, n)
-				// Warning:
-				// 1. May drop too much cache,
-				// because log shipper may still need the cache(a bit slower than writing).
-				// 2. May still has some cache,
-				// because these dirty page cache haven't been flushed to disk or file size is bigger than MaxSize.
+				fnc.FlushHint(job.f, 0, r.cfg.MaxSize)
 				fnc.DropCache(job.f, 0, r.cfg.MaxSize)
 				job.f.Close()
-				flushed = 0
+
+				// Will have a new file in the next round.
+				offset = 0
 				n = 0
 			}
 

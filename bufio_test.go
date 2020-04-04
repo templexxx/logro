@@ -14,8 +14,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"runtime"
-	"sync"
 	"testing"
 )
 
@@ -90,7 +88,7 @@ var errorWriterTests = []errorWriterTest{
 
 func TestBufIOWriteError(t *testing.T) {
 	for _, w := range errorWriterTests {
-		buf := newBufIO(w, 4096)
+		buf := newBufIO(w, 32)
 		_, _, e := buf.write([]byte("hello world"))
 		if e != nil {
 			t.Errorf("Write hello to %v: %v", w, e)
@@ -128,42 +126,5 @@ func TestBufIOFlush(t *testing.T) {
 				t.Fatal("flushed should be 0")
 			}
 		}
-	}
-}
-
-func TestBufIOConcurrentWrite(t *testing.T) {
-
-	w := new(bytes.Buffer)
-	size := 32
-	buf := newBufIO(w, size)
-
-	thread := runtime.NumCPU()
-
-	var wg sync.WaitGroup
-	for i := 0; i < thread; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 256; j++ {
-				n, _, err := buf.write([]byte{uint8(j)})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if n != 1 {
-					t.Fatal("written should be 1")
-				}
-			}
-
-		}()
-	}
-
-	wg.Wait()
-	_, err := buf.flush()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if w.Len() != thread*256 {
-		t.Fatal("wrong size flushed")
 	}
 }

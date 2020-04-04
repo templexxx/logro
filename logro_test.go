@@ -83,7 +83,6 @@ func runTests(t *testing.T, tests ...func(tr *testRotation)) {
 func TestNew(t *testing.T) {
 
 	fn := func(tr *testRotation) {
-		// TODO try empty output
 		// Just new, do nothing.
 	}
 	runTests(t, fn)

@@ -54,7 +54,6 @@ func TestListBackups(t *testing.T) {
 
 	for i := 0; i < 3*2; i++ {
 		testListBackups(t, i, 2)
-
 	}
 }
 
@@ -93,6 +92,8 @@ func makeBackups(output string, n int) (TSs []int64, err error) {
 	os.Create(filepath.Join(filepath.Dir(output), "c.log"))
 	os.Create(filepath.Join(filepath.Dir(output), "a-c"))
 	os.Create(filepath.Join(filepath.Dir(output), "a-c.log"))
+	os.Create(filepath.Join(filepath.Dir(output), "logro-test-a.logx"))
+	os.Create(filepath.Join(filepath.Dir(output), "logro-test-a.log"))
 	return
 }
 

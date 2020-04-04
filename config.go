@@ -24,7 +24,7 @@ type Config struct {
 
 	// BufSize is logro's write buffer size.
 	// Unit: KB.
-	// Default: 256 (256KB).
+	// Default: 64 (64KB).
 	//
 	// Buffer is used for combining writes.
 	// The size of it should be aligned to page size,
@@ -32,7 +32,7 @@ type Config struct {
 	BufSize int64 `json:"buf_size" toml:"buf_size"`
 	// PerSyncSize flushes data to storage media(hint) every PerSyncSize.
 	// Unit: MB.
-	// Default: 8 (8MB).
+	// Default: 16 (16MB).
 	//
 	// Sync is working in background.
 	// The size of it should be aligned to page size,
@@ -51,8 +51,8 @@ const (
 
 // Default configs.
 var (
-	defaultBufSize     = 256 * kb
-	defaultPerSyncSize = 8 * mb
+	defaultBufSize     = 64 * kb
+	defaultPerSyncSize = 16 * mb
 
 	// We don't need to keep too many backups,
 	// in practice, log shipper will collect the logs.
