@@ -18,26 +18,26 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
+
+	"github.com/templexxx/go-diodes"
 
 	"github.com/templexxx/fnc"
 )
 
 // Rotation is implement io.WriteCloser interface with func Sync() (err error).
 type Rotation struct {
-	mu sync.Mutex
-
 	cfg *Config
 
 	isRunning int64
 
 	backups *Backups
 
-	f           *os.File
-	fileWritten int64
-	dirty       int64
-	buf         *bufIO
+	f   *os.File
+	buf *diodes.ManyToOne
 
-	syncJobs   chan syncJob
+	syncJob    chan struct{}
+	flushJobs  chan flushJob
 	ctx        context.Context
 	loopCtx    context.Context
 	loopCancel func()
@@ -77,8 +77,9 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 		return
 	}
 
-	r.buf = newBufIO(r.f, int(r.cfg.BufSize))
-	r.syncJobs = make(chan syncJob, 16)
+	r.buf = diodes.NewManyToOne(2048, nil) // 2048 is enough for 1,000,000 IO/s.
+	r.syncJob = make(chan struct{}, 1)
+	r.flushJobs = make(chan flushJob, 16)
 
 	return
 }
@@ -130,7 +131,8 @@ func (r *Rotation) run() {
 
 func (r *Rotation) startLoop() {
 	r.loopCtx, r.loopCancel = context.WithCancel(context.Background())
-	r.loopWg.Add(1)
+	r.loopWg.Add(2)
+	go r.writeLoop()
 	go r.syncLoop()
 }
 
@@ -141,40 +143,9 @@ func (r *Rotation) Write(p []byte) (written int, err error) {
 		return
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.buf.Set(unsafe.Pointer(&p))
 
-	written, fw, err := r.buf.write(p)
-	if err != nil {
-		return
-	}
-	r.fileWritten += int64(fw)
-	r.dirty += int64(fw)
-
-	if r.dirty >= r.cfg.PerSyncSize {
-		r.syncJobs <- syncJob{
-			f:     r.f,
-			size:  r.dirty,
-			isOld: false,
-		}
-		r.dirty = 0
-	}
-
-	if r.fileWritten >= r.cfg.MaxSize {
-		r.fileWritten = 0 // Even open failed, could avoid keeping recreating.
-		r.syncJobs <- syncJob{
-			f:     r.f,
-			size:  0,
-			isOld: true,
-		}
-		err = r.open()
-		if err != nil {
-			return
-		}
-		r.buf.reset(r.f)
-	}
-
-	return
+	return len(p), nil
 }
 
 // Sync syncs all dirty data.
@@ -184,19 +155,8 @@ func (r *Rotation) Sync() (err error) {
 		return
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.syncJob <- struct{}{}
 
-	fw, err := r.buf.flush()
-	if err != nil {
-		return
-	}
-
-	r.syncJobs <- syncJob{
-		f:     r.f,
-		size:  int64(fw),
-		isOld: false,
-	}
 	return
 }
 
@@ -209,13 +169,8 @@ func (r *Rotation) Close() (err error) {
 
 	r.stopLoop()
 
-	close(r.syncJobs)
+	close(r.flushJobs)
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.fileWritten = 0
-	r.dirty = 0
 	r.buf = nil
 
 	if r.f != nil { // Just in case.
@@ -234,10 +189,57 @@ func (r *Rotation) isClosed() bool {
 	return atomic.LoadInt64(&r.isRunning) == 0
 }
 
-type syncJob struct {
+type flushJob struct {
 	f     *os.File
 	size  int64
 	isOld bool
+}
+
+func (r *Rotation) writeLoop() {
+
+	defer r.loopWg.Done()
+
+	ctx, cancel := context.WithCancel(r.loopCtx)
+	defer cancel()
+
+	bufw := newBufIO(r.f, int(r.cfg.BufSize))
+	dirty := 0
+	written := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.syncJob:
+			fw, _ := bufw.flush() // Only sync dirty in write buffer.
+			dirty += fw
+			written += fw
+			r.flushJobs <- flushJob{r.f, int64(dirty), false}
+			dirty = 0
+		default:
+			p, ok := r.buf.TryNext()
+			if !ok {
+				time.Sleep(2 * time.Millisecond)
+				continue
+			}
+			_, fw, _ := bufw.write(*(*[]byte)(p))
+			dirty += fw
+			written += fw
+
+			if int64(dirty) >= r.cfg.PerSyncSize {
+				r.flushJobs <- flushJob{r.f, int64(dirty), false}
+				dirty = 0
+			}
+
+			if int64(written) >= r.cfg.MaxSize {
+				oldF := r.f
+				err := r.open()
+				if err == nil {
+					r.flushJobs <- flushJob{oldF, 0, true}
+					bufw.reset(r.f)
+				}
+			}
+		}
+	}
 }
 
 func (r *Rotation) syncLoop() {
@@ -252,7 +254,7 @@ func (r *Rotation) syncLoop() {
 
 	for {
 		select {
-		case job := <-r.syncJobs:
+		case job := <-r.flushJobs:
 			if !job.isOld {
 				n += job.size
 				if n >= r.cfg.PerSyncSize {

@@ -34,9 +34,9 @@ func init() {
 }
 
 func TestWritePerf(t *testing.T) {
-	if !enablePerfTest {
-		t.Skip("skip write perf tests, enable it by adding '-perf=true'")
-	}
+	//if !enablePerfTest {
+	//	t.Skip("skip write perf tests, enable it by adding '-perf=true'")
+	//}
 	t.Run("Logro", wrapTestWritePerf(testWritePerf, 128*mb, 256, 64, 16))
 }
 
@@ -82,7 +82,7 @@ func testWritePerf(t *testing.T, total, blockSize, bufSize, perSyncSize int64) {
 	bw := float64(size*int64(thread)) / sec
 	iops := float64(result.submit) / sec
 	lat := time.Duration(result.cost.Nanoseconds() / result.submit)
-	fmt.Printf("config: %#v\n", r.cfg)
+	//fmt.Printf("config: %#v\n", r.cfg)
 	fmt.Printf("submit: %d, complete: %d, bufsize: %s, blocksize: %s, "+
 		"bandwidth: %s/s, io: %s, avg_iops: %.2f, avg_latency: %s, cost: %s thead: %d\n",
 		result.submit, result.submit-result.fail, byteToStr(float64(cfg.BufSize)), byteToStr(float64(blockSize)),
