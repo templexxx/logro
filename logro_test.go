@@ -16,15 +16,17 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/goleak"
 )
 
 var testConfig = &Config{
-	MaxSize:     32,
-	BufSize:     4,
-	PerSyncSize: 16,
-	Developed:   true,
+	BufItem:      64,
+	MaxSize:      32,
+	PerWriteSize: 4,
+	PerSyncSize:  16,
+	Developed:    true,
 }
 
 type testEnv struct {
@@ -61,23 +63,20 @@ type testRotation struct {
 	r *Rotation
 }
 
-func runTests(t *testing.T, tests ...func(tr *testRotation)) {
+func runTest(t *testing.T, test func(tr *testRotation)) {
 
-	for _, test := range tests {
-		e, err := makeTestEnv()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		tr := &testRotation{
-			T: t,
-			r: e.r,
-		}
-
-		test(tr)
-
-		e.clear()
+	e, err := makeTestEnv()
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer e.clear()
+
+	tr := &testRotation{
+		T: t,
+		r: e.r,
+	}
+
+	test(tr)
 }
 
 func TestNew(t *testing.T) {
@@ -85,12 +84,13 @@ func TestNew(t *testing.T) {
 	fn := func(tr *testRotation) {
 		// Just new, do nothing.
 	}
-	runTests(t, fn)
+	runTest(t, fn)
 }
 
 func TestRotation_Write(t *testing.T) {
 
 	fn := func(tr *testRotation) {
+
 		r := tr.r
 		for i := 0; i < int(r.cfg.MaxSize+1); i++ {
 			n, err := r.Write([]byte{'1'})
@@ -102,7 +102,7 @@ func TestRotation_Write(t *testing.T) {
 			}
 		}
 	}
-	runTests(t, fn)
+	runTest(t, fn)
 }
 
 func TestRotation_Sync(t *testing.T) {
@@ -120,12 +120,18 @@ func TestRotation_Sync(t *testing.T) {
 				tr.Fatal("written mismatch")
 			}
 		}
+
 		r.Sync()
+
+		// writeLoop will sleep for 2 ms if there is no write,
+		// so sleep here for ensuring all data written.
+		time.Sleep(4 * time.Millisecond)
+
 		if !isMatchFileContent(p, r.cfg.OutputPath) {
 			tr.Fatal("log file content mismatch")
 		}
 	}
-	runTests(t, fn)
+	runTest(t, fn)
 }
 
 // check no goroutine leak
@@ -144,7 +150,7 @@ func TestRotation_Close(t *testing.T) {
 			}
 		}
 	}
-	runTests(t, fn)
+	runTest(t, fn)
 }
 
 // Written > MaxSize, should open a new log file.
@@ -152,11 +158,12 @@ func TestRotation_WriteMaxSize(t *testing.T) {
 
 	fn := func(tr *testRotation) {
 		r := tr.r
-		p := make([]byte, r.cfg.MaxSize+1)
+		p := make([]byte, 1)
 		rand.Read(p)
 
-		for i := 0; i < len(p); i++ {
-			n, err := r.Write([]byte{p[i]})
+		for i := 0; i < int(r.cfg.MaxSize+1); i++ {
+			time.Sleep(100 * time.Microsecond) // Avoiding too fast write.
+			n, err := r.Write(p)
 			if err != nil {
 				tr.Fatal(err)
 			}
@@ -165,17 +172,19 @@ func TestRotation_WriteMaxSize(t *testing.T) {
 			}
 		}
 
-		oldFP := r.backups.Pop().(Backup).fp
+		// writeLoop will sleep for 2 ms if there is no write,
+		// so sleep here for ensuring all data written.
+		time.Sleep(4 * time.Millisecond)
 
-		if !isMatchFileSize(r.cfg.MaxSize, oldFP) {
-			tr.Fatal("log file size mismatch")
+		backups, err := listBackups(r.cfg.OutputPath, r.cfg.MaxBackups)
+		if err != nil {
+			t.Fatal(err)
 		}
-
-		if !isMatchFileContent(p[:r.cfg.MaxSize], oldFP) {
-			tr.Fatal("log file content mismatch")
+		if backups.Len() == 0 {
+			t.Fatal("should have a backup")
 		}
 	}
-	runTests(t, fn)
+	runTest(t, fn)
 }
 
 // Written > MaxSize, should open a new log file. ( Write concurrent)
@@ -193,6 +202,7 @@ func TestRotation_WriteMaxSizeConcurrent(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				for i, v := range p[int64(i)*pLen/2 : int64(i)*pLen/2+pLen/2] {
+					time.Sleep(100 * time.Microsecond) // Avoiding too fast write.
 					n, err := r.Write([]byte{v})
 					if err != nil {
 						tr.Fatal(err, i)
@@ -206,13 +216,19 @@ func TestRotation_WriteMaxSizeConcurrent(t *testing.T) {
 		}
 		wg.Wait()
 
-		oldFP := r.backups.Pop().(Backup).fp
+		// writeLoop will sleep for 2 ms if there is no write,
+		// so sleep here for ensuring all data written.
+		time.Sleep(4 * time.Millisecond)
 
-		if !isMatchFileSize(r.cfg.MaxSize, oldFP) {
-			tr.Fatal("log file size mismatch")
+		backups, err := listBackups(r.cfg.OutputPath, r.cfg.MaxBackups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if backups.Len() == 0 {
+			t.Fatal("should have a backup")
 		}
 	}
-	runTests(t, fn)
+	runTest(t, fn)
 }
 
 func isMatchFileSize(size int64, output string) bool {

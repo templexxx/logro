@@ -77,7 +77,7 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 		return
 	}
 
-	r.buf = diodes.NewManyToOne(2048, nil) // 2048 is enough for 1,000,000 IO/s.
+	r.buf = diodes.NewManyToOne(cfg.BufItem, nil)
 	r.syncJob = make(chan struct{}, 1)
 	r.flushJobs = make(chan flushJob, 16)
 
@@ -89,7 +89,8 @@ func prepare(cfg *Config) (r *Rotation, err error) {
 func (r *Rotation) open() (err error) {
 
 	fp := r.cfg.OutputPath
-	if fnc.Exist(fp) { // File exist may happen in rotation process.
+
+	if r.f != nil { // File exist may happen in rotation process.
 		backupFP, t := makeBackupFP(fp, r.cfg.LocalTime, time.Now())
 		err = os.Rename(fp, backupFP)
 		if err != nil {
@@ -202,19 +203,28 @@ func (r *Rotation) writeLoop() {
 	ctx, cancel := context.WithCancel(r.loopCtx)
 	defer cancel()
 
-	bufw := newBufIO(r.f, int(r.cfg.BufSize))
+	bufw := newBufIO(r.f, int(r.cfg.PerWriteSize))
 	dirty := 0
 	written := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
+
 		case <-r.syncJob:
-			fw, _ := bufw.flush() // Only sync dirty in write buffer.
+			for i := 0; i < r.cfg.BufItem; i++ { // There is a limit, avoiding blocking.
+				p, ok := r.buf.TryNext()
+				if !ok {
+					break
+				}
+				_, fw, _ := bufw.write(*(*[]byte)(p))
+				dirty += fw
+				written += fw
+			}
+			fw, _ := bufw.flush()
 			dirty += fw
 			written += fw
-			r.flushJobs <- flushJob{r.f, int64(dirty), false}
-			dirty = 0
+
 		default:
 			p, ok := r.buf.TryNext()
 			if !ok {
@@ -231,6 +241,7 @@ func (r *Rotation) writeLoop() {
 			}
 
 			if int64(written) >= r.cfg.MaxSize {
+				written = 0 // Avoiding keeping renew file if we can't create new file.
 				oldF := r.f
 				err := r.open()
 				if err == nil {

@@ -22,15 +22,24 @@ type Config struct {
 	// If true, use local time.
 	LocalTime bool `json:"local_time" toml:"local_time"`
 
-	// BufSize is logro's write buffer size.
+	// BufItem is the number of logro's write buffer items,
+	// logro buffers can hold write input up to BufItem.
+	// Default: 2048. 2048 is enough for 1 million IOPS. TODO prove it
+	//
+	// Buffer will overwrite data on writes in lieu of blocking.
+	// Losing data will be up to BufItem.
+	BufItem int `json:"buf_item" toml:"buf_item"`
+	// PerWriteSize is logro's write size,
+	// logro writes data to page cache every PerWriteSize.
 	// Unit: KB.
 	// Default: 64 (64KB).
 	//
-	// Buffer is used for combining writes.
+	// It's used for combining writes.
 	// The size of it should be aligned to page size,
 	// and it shouldn't be too large, because that may block logro write.
-	BufSize int64 `json:"buf_size" toml:"buf_size"`
-	// PerSyncSize flushes data to storage media(hint) every PerSyncSize.
+	PerWriteSize int64 `json:"per_write_size" toml:"per_write_size"`
+	// PerSyncSize is logro's sync size,
+	// logro flushes data to storage media(hint) every PerSyncSize.
 	// Unit: MB.
 	// Default: 16 (16MB).
 	//
@@ -51,8 +60,10 @@ const (
 
 // Default configs.
 var (
-	defaultBufSize     = 64 * kb
-	defaultPerSyncSize = 16 * mb
+	defaultBufItem = 2048
+
+	defaultPerWriteSize = 64 * kb
+	defaultPerSyncSize  = 16 * mb
 
 	// We don't need to keep too many backups,
 	// in practice, log shipper will collect the logs.
@@ -76,10 +87,14 @@ func (c *Config) adjust() {
 		c.MaxBackups = defaultMaxBackups
 	}
 
-	if c.BufSize <= 0 {
-		c.BufSize = defaultBufSize
+	if c.BufItem <= 0 {
+		c.BufItem = defaultBufItem
+	}
+
+	if c.PerWriteSize <= 0 {
+		c.PerWriteSize = defaultPerWriteSize
 	} else {
-		c.BufSize = c.BufSize * k
+		c.PerWriteSize = c.PerWriteSize * k
 	}
 	if c.PerSyncSize <= 0 {
 		c.PerSyncSize = defaultPerSyncSize
@@ -88,11 +103,11 @@ func (c *Config) adjust() {
 	}
 
 	if !c.Developed {
-		if c.PerSyncSize < 2*c.BufSize {
-			c.PerSyncSize = 2 * c.BufSize
+		if c.PerSyncSize < 2*c.PerWriteSize {
+			c.PerSyncSize = 2 * c.PerWriteSize
 		}
 		c.MaxSize = alignToPage(c.MaxSize)
-		c.BufSize = alignToPage(c.BufSize)
+		c.PerWriteSize = alignToPage(c.PerWriteSize)
 		c.PerSyncSize = alignToPage(c.PerSyncSize)
 	}
 }
