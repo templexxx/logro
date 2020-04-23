@@ -24,7 +24,11 @@ func TestConfigParse(t *testing.T) {
 		t.Fatal("mismatch")
 	}
 
-	if cfg.BufSize != defaultBufSize {
+	if cfg.BufItem != defaultBufItem {
+		t.Fatal("mismatch")
+	}
+
+	if cfg.PerWriteSize != defaultPerWriteSize {
 		t.Fatal("mismatch")
 	}
 
@@ -35,16 +39,16 @@ func TestConfigParse(t *testing.T) {
 
 func TestConfigDevelop(t *testing.T) {
 	cfg := &Config{
-		Developed:   true,
-		MaxSize:     1,
-		BufSize:     2,
-		PerSyncSize: 3,
+		Developed:    true,
+		MaxSize:      1,
+		PerWriteSize: 2,
+		PerSyncSize:  3,
 	}
 	cfg.adjust()
 	if cfg.MaxSize != 1 {
 		t.Fatal("mismatch")
 	}
-	if cfg.BufSize != 2 {
+	if cfg.PerWriteSize != 2 {
 		t.Fatal("mismatch")
 	}
 	if cfg.PerSyncSize != 3 {

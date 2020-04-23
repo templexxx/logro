@@ -33,10 +33,12 @@ func init() {
 	flag.BoolVar(&enablePerfTest, "perf", false, "enable write perf tests")
 }
 
+// TODO test BufItem how many is OK?
+
 func TestWritePerf(t *testing.T) {
-	//if !enablePerfTest {
-	//	t.Skip("skip write perf tests, enable it by adding '-perf=true'")
-	//}
+	if !enablePerfTest {
+		t.Skip("skip write perf tests, enable it by adding '-perf=true'")
+	}
 	t.Run("Logro", wrapTestWritePerf(testWritePerf, 128*mb, 256, 64, 16))
 }
 
@@ -49,6 +51,7 @@ func wrapTestWritePerf(f func(*testing.T,
 	}
 }
 
+// TODO result has P999 P9999
 func testWritePerf(t *testing.T, total, blockSize, bufSize, perSyncSize int64) {
 	dir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
@@ -61,7 +64,7 @@ func testWritePerf(t *testing.T, total, blockSize, bufSize, perSyncSize int64) {
 
 	cfg := new(Config)
 	cfg.OutputPath = fp
-	cfg.BufSize = bufSize
+	cfg.PerWriteSize = bufSize
 	cfg.PerSyncSize = perSyncSize
 
 	r, err := New(cfg)
@@ -85,7 +88,7 @@ func testWritePerf(t *testing.T, total, blockSize, bufSize, perSyncSize int64) {
 	//fmt.Printf("config: %#v\n", r.cfg)
 	fmt.Printf("submit: %d, complete: %d, bufsize: %s, blocksize: %s, "+
 		"bandwidth: %s/s, io: %s, avg_iops: %.2f, avg_latency: %s, cost: %s thead: %d\n",
-		result.submit, result.submit-result.fail, byteToStr(float64(cfg.BufSize)), byteToStr(float64(blockSize)),
+		result.submit, result.submit-result.fail, byteToStr(float64(cfg.PerWriteSize)), byteToStr(float64(blockSize)),
 		byteToStr(bw), byteToStr(float64(size*int64(thread))), iops, lat, result.cost.String(), thread)
 
 }
