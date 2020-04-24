@@ -3,11 +3,18 @@ Logro
 
 ## Introduction
 
-Logro is a log rolling package with page cache control in Go. Inspired by [lumberjack](https://github.com/natefinch/lumberjack)
+Logro is a non-blocking log rolling package with page cache control in Go. Inspired by [lumberjack](https://github.com/natefinch/lumberjack)
 
-Logro is built for high performance:
+Logro is built for high performance (About 50 ns/op):
 
-- __Write with buffer__
+- __Non-blocking Write__
+
+    All write won't be blocked (Just pass a pointer then return).
+    You will never have to worry about the log write stall impacting P999.
+    
+    When the IOPS is unusual high (may caused by bugs or unexpected behavior, e.g. 10 million/s), Logro will overwrite data on writes in lieu of blocking.
+    
+- __Write Combination__
 
     All log data will be written to a user-space buffer first, 
     then flush to the log file.

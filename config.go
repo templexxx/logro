@@ -24,7 +24,7 @@ type Config struct {
 
 	// BufItem is the number of logro's write buffer items,
 	// logro buffers can hold write input up to BufItem.
-	// Default: 2048. 2048 is enough for 1 million IOPS. TODO prove it
+	// Default: 2048. 2048 is enough for 1 million IOPS.
 	//
 	// Buffer will overwrite data on writes in lieu of blocking.
 	// Losing data will be up to BufItem.
