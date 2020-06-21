@@ -18,7 +18,7 @@ import (
 // This bench is only for non-blocking model,
 // that means all write are same for Write.
 //
-// if there is write stall which will impact user-facing write,
+// If there is write stall which will impact user-facing write,
 // it shouldn't use this bench.
 func BenchmarkRotation_Write(b *testing.B) {
 	dir, err := ioutil.TempDir(os.TempDir(), "")
