@@ -1,6 +1,11 @@
 Logro
 ===
 
+## Deprecated
+
+Almost all high performance log library use sync.Pool to reuse memory, so it may cause
+problem when just pass a pointer to logro.
+
 ## Introduction
 
 Logro is a non-blocking log rolling package with page cache control in Go. Inspired by [lumberjack](https://github.com/natefinch/lumberjack)
